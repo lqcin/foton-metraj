@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.FOTONCrawlerMetraj" parent="Theme.AppCompat.Light.NoActionBar">
+        <item name="colorPrimary">@color/foton_primary</item>
+        <item name="colorPrimaryDark">@color/foton_primary_dark</item>
+        <item name="colorAccent">@color/foton_accent</item>
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:statusBarColor">@color/foton_primary_dark</item>
+    </style>
+</resources>

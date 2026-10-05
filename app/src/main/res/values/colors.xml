@@ -1,1 +1,8 @@
-
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="foton_primary">#174A5B</color>
+    <color name="foton_primary_dark">#0F3340</color>
+    <color name="foton_accent">#C56A2D</color>
+    <color name="foton_ok">#1E7D46</color>
+    <color name="foton_warn">#B14C32</color>
+</resources>
