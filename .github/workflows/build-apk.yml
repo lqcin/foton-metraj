@@ -1,1 +1,50 @@
+name: Android APK Oluştur
 
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main" ]
+    paths-ignore:
+      - "README.md"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Kodu al
+        uses: actions/checkout@v4
+
+      - name: Java 17 kur
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Android SDK hazırla
+        uses: android-actions/setup-android@v3
+
+      - name: Android lisanslarını kabul et
+        run: yes | sdkmanager --licenses >/dev/null || true
+
+      - name: Android 35 bileşenlerini kur
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Gradle 8.7 kur
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Debug APK derle
+        run: gradle :app:assembleDebug --stacktrace
+
+      - name: APK adını düzenle
+        run: cp app/build/outputs/apk/debug/app-debug.apk FOTON-Crawler-Metraj-v0.1-debug.apk
+
+      - name: APK artifact yükle
+        uses: actions/upload-artifact@v4
+        with:
+          name: FOTON-Crawler-Metraj-v0.1
+          path: FOTON-Crawler-Metraj-v0.1-debug.apk
+          if-no-files-found: error
+          retention-days: 30
