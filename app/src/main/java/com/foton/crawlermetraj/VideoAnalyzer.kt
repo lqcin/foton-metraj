@@ -27,7 +27,7 @@ class VideoAnalyzer(private val context: Context) {
 
     private val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
 
-    suspend fun analyze(uri: Uri, fileName: String): VideoResult {
+    suspend fun analyze(uri: Uri, fileName: String, folderName: String? = null): VideoResult {
         val retriever = MediaMetadataRetriever()
         return try {
             retriever.setDataSource(context, uri)
@@ -37,7 +37,7 @@ class VideoAnalyzer(private val context: Context) {
             if (durationMs <= 0L) {
                 return VideoResult(
                     fileName,
-                    headerFromFileName(fileName),
+                    headerFromFileName(fileName, folderName),
                     null,
                     null,
                     null,
@@ -52,7 +52,7 @@ class VideoAnalyzer(private val context: Context) {
             if (durationMs <= 2_000L) {
                 return VideoResult(
                     fileName,
-                    headerFromFileName(fileName),
+                    headerFromFileName(fileName, folderName),
                     null,
                     null,
                     null,
@@ -63,7 +63,7 @@ class VideoAnalyzer(private val context: Context) {
 
             // Yardımcı bilgiler için OCR yapmıyoruz. Hat adı dosya adından
             // yakalanabiliyorsa yakalanır; yakalanamazsa boş kalması sorun değildir.
-            val header = headerFromFileName(fileName)
+            val header = headerFromFileName(fileName, folderName)
 
             val first = findFirstMeter(retriever, durationMs)
             val last = findLastMeter(retriever, durationMs)
@@ -87,7 +87,7 @@ class VideoAnalyzer(private val context: Context) {
         } catch (e: Exception) {
             VideoResult(
                 fileName,
-                headerFromFileName(fileName),
+                headerFromFileName(fileName, folderName),
                 null,
                 null,
                 null,
@@ -289,19 +289,38 @@ class VideoAnalyzer(private val context: Context) {
         return value.takeIf { it.isFinite() && it in -999.99..9999.99 }
     }
 
-    /** Dosya adı örn. a43-44_20260924_... -> A43-A44 */
-    private fun headerFromFileName(fileName: String): HeaderInfo {
+    /** Dosya adı örn. a43-44_20260924_... -> A43-A44; klasör adı -> parsel. */
+    private fun headerFromFileName(fileName: String, folderName: String?): HeaderInfo {
         val stem = fileName.substringBeforeLast('.')
         val firstToken = stem.substringBefore('_').trim()
             .replace('—', '-')
             .replace('–', '-')
         val parts = firstToken.split('-').map { it.trim() }.filter { it.isNotBlank() }
-        if (parts.size < 2) return HeaderInfo()
 
-        val left = normalizeNode(parts[0], null) ?: return HeaderInfo()
-        val prefix = left.takeWhile { it.isLetter() }
-        val right = normalizeNode(parts[1], prefix) ?: return HeaderInfo()
-        return HeaderInfo(konum = "$left-$right")
+        var konum: String? = null
+        if (parts.size >= 2) {
+            val left = normalizeNode(parts[0], null)
+            if (left != null) {
+                val prefix = left.takeWhile { it.isLetter() }
+                val right = normalizeNode(parts[1], prefix)
+                if (right != null) konum = "$left-$right"
+            }
+        }
+
+        return HeaderInfo(
+            parsel = parseParselFromFolder(folderName),
+            konum = konum
+        )
+    }
+
+    /** Örn. "DRNKY KUZU GRP 3.KSM 145 PRSL ROBOT" -> 145 */
+    private fun parseParselFromFolder(folderName: String?): String? {
+        if (folderName.isNullOrBlank()) return null
+        val normalized = folderName.uppercase(Locale("tr", "TR"))
+        return Regex("(\\d{1,6})\\s*(?:PRSL|PARSEL)", RegexOption.IGNORE_CASE)
+            .find(normalized)
+            ?.groupValues
+            ?.getOrNull(1)
     }
 
     private fun normalizeNode(raw: String, inheritedPrefix: String?): String? {
