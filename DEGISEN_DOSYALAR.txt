@@ -1,0 +1,22 @@
+FOTON Crawler Metraj v0.4 - OCR düzeltmesi
+
+Mevcut GitHub reposunda ZIP içindeki dosyaları AYNI YOLLARA yükleyip üstüne yazın.
+
+Değişen dosyalar:
+- app/src/main/java/com/foton/crawlermetraj/VideoAnalyzer.kt
+- app/src/main/java/com/foton/crawlermetraj/MainActivity.kt
+- app/src/main/java/com/foton/crawlermetraj/FolderMonitorService.kt
+- app/src/main/java/com/foton/crawlermetraj/ResultStore.kt
+- app/build.gradle.kts
+- .github/workflows/build-apk.yml
+
+Düzeltmeler:
+1) Hat adı OCR yerine dosya adından okunur. Ör: a43-44_...mp4 -> A43-A44
+2) Parsel OCR yerine klasör adından okunur. Ör: "145 PRSL" -> 145
+3) OCR yalnız metre sayacı için dar sağ-alt alanda çalışır.
+4) Kırmızı yazı 4x büyütülerek iki farklı renk eşiğiyle denenir.
+5) İlk ve son sayaç okunamazsa sonuç toplama dahil edilmez.
+6) Önceki sürümde OKUNAMADI olan videolar yeni analizde tekrar denenebilir.
+7) Aynı video için eski başarısız satır güncellenir, mükerrer satır oluşmaz.
+
+Not: Bu sürüm mevcut uygulamanın üstüne güncelleme olarak kurulabilir (aynı applicationId).
