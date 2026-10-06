@@ -21,8 +21,6 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      # v3, Google'in artik yayinlamadigi eski "tools" SDK paketini
-      # istemeye calisabildigi icin v4 + acik paket listesi kullaniyoruz.
       - name: Android SDK hazirla
         uses: android-actions/setup-android@v4
         with:
@@ -40,12 +38,12 @@ jobs:
         run: gradle --no-daemon :app:assembleDebug --stacktrace
 
       - name: APK adini duzenle
-        run: cp app/build/outputs/apk/debug/app-debug.apk FOTON-Crawler-Metraj-v0.2-debug.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk FOTON-Crawler-Metraj-v0.4-debug.apk
 
       - name: APK artifact yukle
         uses: actions/upload-artifact@v4
         with:
-          name: FOTON-Crawler-Metraj-v0.2
-          path: FOTON-Crawler-Metraj-v0.2-debug.apk
+          name: FOTON-Crawler-Metraj-v0.4
+          path: FOTON-Crawler-Metraj-v0.4-debug.apk
           if-no-files-found: error
           retention-days: 30
