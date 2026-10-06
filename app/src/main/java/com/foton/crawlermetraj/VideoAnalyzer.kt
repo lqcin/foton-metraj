@@ -14,7 +14,7 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * v0.4.2 - 1. saniye + renkten bağımsız sayaç OCR.
+ * v0.4.3 - sabit ilk/son kare + renkten bağımsız sayaç OCR.
  *
  * Kritik kural:
  *   metraj = ABS(son sayaç - ilk sayaç)
@@ -43,6 +43,21 @@ class VideoAnalyzer(private val context: Context) {
                     null,
                     null,
                     "Video süresi okunamadı"
+                )
+            }
+
+            // Sabit örnekleme kuralında ilk kare 1. saniye, son kare ise
+            // videonun bitişinden 1 saniye öncedir. 2 saniye ve daha kısa
+            // videolarda bu iki nokta güvenilir biçimde ayrılamaz.
+            if (durationMs <= 2_000L) {
+                return VideoResult(
+                    fileName,
+                    headerFromFileName(fileName),
+                    null,
+                    null,
+                    null,
+                    null,
+                    "Video çok kısa (2 saniye veya daha az)"
                 )
             }
 
@@ -108,20 +123,15 @@ class VideoAnalyzer(private val context: Context) {
         retriever: MediaMetadataRetriever,
         durationMs: Long
     ): MeterHit? {
-        // Son kare bazen eksik/bozuk olabilir. Bitişe en yakın kareyi önce deneriz;
-        // yalnız okunamazsa en fazla 2 saniye geriye gideriz. Video ortası taranmaz.
-        val offsets = longArrayOf(100L, 350L, 700L, 1_000L, 1_500L, 2_000L)
-        for (offset in offsets) {
-            val t = max(0L, durationMs - offset)
-            val frame = getFrame(retriever, t) ?: continue
-            val meter = try {
-                readMeter(frame)
-            } finally {
-                frame.recycle()
-            }
-            if (meter != null) return MeterHit(meter, t)
+        // Kullanıcı kuralı: SON SAYAÇ yalnızca videonun toplam süresinden
+        // 1.000 ms (1 saniye) önceki kareden alınır. Başka karelere kaymayız.
+        val t = durationMs - 1_000L
+        val frame = getFrame(retriever, t) ?: return null
+        return try {
+            readMeter(frame)?.let { MeterHit(it, t) }
+        } finally {
+            frame.recycle()
         }
-        return null
     }
 
     private fun getFrame(retriever: MediaMetadataRetriever, timeMs: Long): Bitmap? {
