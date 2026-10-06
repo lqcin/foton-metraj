@@ -126,7 +126,8 @@ class VideoAnalyzer(private val context: Context) {
      */
     private fun parseHatFromFileName(fileName: String): String? {
         val stem = fileName.substringBeforeLast('.')
-        val prefix = stem.substringBefore(Regex("_20\\d{6}"))
+        val tarihIndex = Regex("_20\\d{6}").find(stem)?.range?.first ?: stem.length
+        val prefix = stem.substring(0, tarihIndex)
             .trim()
             .replace('–', '-')
             .replace('—', '-')
