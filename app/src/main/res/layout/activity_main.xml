@@ -18,7 +18,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
-        android:text="Her video için metraj = |son sayaç − ilk sayaç|"
+        android:text="Metraj = |son sayaç − ilk sayaç|"
         android:textSize="14sp"
         android:textColor="#4B5563" />
 
@@ -26,7 +26,7 @@
         android:id="@+id/editFirma"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="18dp"
+        android:layout_marginTop="14dp"
         android:hint="Firma adı (ör. LEDA)"
         android:inputType="textCapWords"
         android:singleLine="true" />
@@ -43,31 +43,38 @@
         android:id="@+id/buttonFolder"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
+        android:layout_marginTop="6dp"
         android:text="VİDEO KLASÖRÜ SEÇ" />
 
     <TextView
         android:id="@+id/textFolder"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="6dp"
+        android:layout_marginTop="5dp"
         android:text="Klasör seçilmedi"
         android:textColor="#6B7280"
         android:maxLines="2" />
 
     <Button
-        android:id="@+id/buttonAnalyze"
+        android:id="@+id/buttonMonitor"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="10dp"
-        android:text="ANALİZ ET" />
+        android:text="OTOMATİK TAKİBİ BAŞLAT" />
+
+    <Button
+        android:id="@+id/buttonAnalyze"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="KLASÖRÜ TOPLU ANALİZ ET" />
 
     <ProgressBar
         android:id="@+id/progress"
         style="?android:attr/progressBarStyleHorizontal"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
+        android:layout_marginTop="7dp"
         android:max="100"
         android:progress="0" />
 
@@ -75,7 +82,7 @@
         android:id="@+id/textStatus"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="6dp"
+        android:layout_marginTop="5dp"
         android:text="Hazır"
         android:textColor="#374151" />
 
@@ -83,7 +90,7 @@
         android:id="@+id/textTotal"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="10dp"
+        android:layout_marginTop="8dp"
         android:text="TOPLAM: 0,00 m"
         android:textSize="20sp"
         android:textStyle="bold"
@@ -93,7 +100,7 @@
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:layout_marginTop="8dp"
+        android:layout_marginTop="6dp"
         android:fillViewport="true">
 
         <LinearLayout
