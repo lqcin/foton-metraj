@@ -14,6 +14,7 @@ object ResultStore {
     private const val KEY_MONITOR_FIRMA = "monitor_firma"
     private const val KEY_MONITOR_TARIH = "monitor_tarih"
     private const val KEY_MONITOR_STATUS = "monitor_status"
+    private const val CURRENT_ANALYSIS_VERSION = 5
 
     data class MonitorConfig(
         val active: Boolean,
@@ -41,7 +42,8 @@ object ResultStore {
             if (o.optString("firma") != firma || o.optString("tarih") != tarih || o.optString("uri") != targetUri) continue
             val firstOk = o.has("firstMeter") && !o.isNull("firstMeter")
             val lastOk = o.has("lastMeter") && !o.isNull("lastMeter")
-            if (firstOk && lastOk) return true
+            val versionOk = o.optInt("analysisVersion", 0) >= CURRENT_ANALYSIS_VERSION
+            if (firstOk && lastOk && versionOk) return true
         }
         return false
     }
@@ -79,6 +81,7 @@ object ResultStore {
             put("tarih", tarih)
             put("uri", targetUri)
             put("createdAt", System.currentTimeMillis())
+            put("analysisVersion", CURRENT_ANALYSIS_VERSION)
             put("fileName", result.fileName)
             put("parsel", h.parsel ?: JSONObject.NULL)
             put("konum", h.konum ?: JSONObject.NULL)

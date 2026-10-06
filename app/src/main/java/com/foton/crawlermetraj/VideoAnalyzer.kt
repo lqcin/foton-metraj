@@ -6,22 +6,29 @@ import android.graphics.Color
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.Text
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import kotlinx.coroutines.tasks.await
 import java.util.Locale
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.round
 
 /**
- * v0.4.3 - sabit ilk/son kare + renkten bağımsız sayaç OCR.
+ * v0.5.0 - saha videosu doğrulamalı sayaç okuma.
  *
- * Kritik kural:
- *   metraj = ABS(son sayaç - ilk sayaç)
+ * Sabit kurallar:
+ *  - İlk sayaç: videonun tam 1.000 ms karesi
+ *  - Son sayaç: video süresi - 1.000 ms karesi
+ *  - Metraj: ABS(son - ilk)
  *
- * Parsel / hat / çap / yön gibi bilgiler yardımcı bilgidir. Bunların hiçbiri
- * okunamasa bile ilk ve son sayaç okunuyorsa sonuç BAŞARILI kabul edilir ve
- * Excel'e aktarılır.
+ * Güvenlik kuralları:
+ *  - Metre sayacı ile Lens/Araç Basıncı/Eğim birbirine karıştırılmaz.
+ *  - Sayaç için yalnız "Metre Sayacı" satırı veya o satıra ait dar ROI kabul edilir.
+ *  - Lens basıncı gibi tek ondalıklı değerler sayaç olarak kabul edilmez.
+ *  - Hat adı dosya adından alınır ve A38-A38-1 gibi ekler korunur.
+ *  - Parsel öncelikle videodaki OSD "Boru Tanımı: ...PARSEL" bilgisinden alınır.
  */
 class VideoAnalyzer(private val context: Context) {
 
@@ -34,25 +41,15 @@ class VideoAnalyzer(private val context: Context) {
             val durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
                 ?.toLongOrNull() ?: 0L
 
-            if (durationMs <= 0L) {
-                return VideoResult(
-                    fileName,
-                    headerFromFileName(fileName, folderName),
-                    null,
-                    null,
-                    null,
-                    null,
-                    "Video süresi okunamadı"
-                )
-            }
+            val fileHeader = headerFromFileName(fileName, folderName)
 
-            // Sabit örnekleme kuralında ilk kare 1. saniye, son kare ise
-            // videonun bitişinden 1 saniye öncedir. 2 saniye ve daha kısa
-            // videolarda bu iki nokta güvenilir biçimde ayrılamaz.
+            if (durationMs <= 0L) {
+                return VideoResult(fileName, fileHeader, null, null, null, null, "Video süresi okunamadı")
+            }
             if (durationMs <= 2_000L) {
                 return VideoResult(
                     fileName,
-                    headerFromFileName(fileName, folderName),
+                    fileHeader,
                     null,
                     null,
                     null,
@@ -61,38 +58,70 @@ class VideoAnalyzer(private val context: Context) {
                 )
             }
 
-            // Yardımcı bilgiler için OCR yapmıyoruz. Hat adı dosya adından
-            // yakalanabiliyorsa yakalanır; yakalanamazsa boş kalması sorun değildir.
-            val header = headerFromFileName(fileName, folderName)
+            val firstTime = 1_000L
+            val lastTime = durationMs - 1_000L
 
-            val first = findFirstMeter(retriever, durationMs)
-            val last = findLastMeter(retriever, durationMs)
+            val firstFrame = getFrame(retriever, firstTime)
+            val lastFrame = getFrame(retriever, lastTime)
 
-            val err = when {
-                first == null && last == null -> "İlk ve son sayaç okunamadı"
-                first == null -> "İlk sayaç okunamadı"
-                last == null -> "Son sayaç okunamadı"
+            var osdHeader = HeaderInfo()
+            var firstMeter: Double? = null
+            var lastMeter: Double? = null
+
+            if (firstFrame != null) {
+                try {
+                    osdHeader = readHeader(firstFrame)
+                    firstMeter = readMeter(firstFrame)
+                } finally {
+                    firstFrame.recycle()
+                }
+            }
+
+            if (lastFrame != null) {
+                try {
+                    lastMeter = readMeter(lastFrame)
+                } finally {
+                    lastFrame.recycle()
+                }
+            }
+
+            // Excel'e gidecek alanların kaynak önceliği bilinçli olarak sabittir.
+            // Hat: dosya adı > OSD. Parsel: OSD > klasör adı.
+            val header = HeaderInfo(
+                parsel = osdHeader.parsel ?: fileHeader.parsel,
+                konum = fileHeader.konum ?: osdHeader.konum,
+                capMm = osdHeader.capMm,
+                yon = osdHeader.yon
+            )
+
+            val error = when {
+                firstFrame == null && lastFrame == null -> "İlk ve son kare alınamadı"
+                firstFrame == null -> "1. saniye karesi alınamadı"
+                lastFrame == null -> "Son - 1 saniye karesi alınamadı"
+                firstMeter == null && lastMeter == null -> "İlk ve son Metre Sayacı okunamadı"
+                firstMeter == null -> "1. saniyedeki Metre Sayacı okunamadı"
+                lastMeter == null -> "Son - 1 saniyedeki Metre Sayacı okunamadı"
                 else -> null
             }
 
             VideoResult(
                 fileName = fileName,
                 header = header,
-                firstMeter = first?.value,
-                lastMeter = last?.value,
-                firstTimeMs = first?.timeMs,
-                lastTimeMs = last?.timeMs,
-                error = err
+                firstMeter = firstMeter,
+                lastMeter = lastMeter,
+                firstTimeMs = if (firstMeter != null) firstTime else null,
+                lastTimeMs = if (lastMeter != null) lastTime else null,
+                error = error
             )
         } catch (e: Exception) {
             VideoResult(
-                fileName,
-                headerFromFileName(fileName, folderName),
-                null,
-                null,
-                null,
-                null,
-                e.message ?: "Video analiz hatası"
+                fileName = fileName,
+                header = headerFromFileName(fileName, folderName),
+                firstMeter = null,
+                lastMeter = null,
+                firstTimeMs = null,
+                lastTimeMs = null,
+                error = e.message ?: "Video analiz hatası"
             )
         } finally {
             try {
@@ -102,103 +131,351 @@ class VideoAnalyzer(private val context: Context) {
         }
     }
 
-    private data class MeterHit(val value: Double, val timeMs: Long)
-
-    private suspend fun findFirstMeter(
-        retriever: MediaMetadataRetriever,
-        durationMs: Long
-    ): MeterHit? {
-        // Kullanıcı kuralı: İLK SAYAÇ yalnızca videonun 1.000 ms (1. saniye)
-        // karesinden alınır. Başka zamanlara kayıp yanlış bir değeri seçmeyiz.
-        val t = min(1_000L, max(0L, durationMs - 1L))
-        val frame = getFrame(retriever, t) ?: return null
-        return try {
-            readMeter(frame)?.let { MeterHit(it, t) }
-        } finally {
-            frame.recycle()
-        }
-    }
-
-    private suspend fun findLastMeter(
-        retriever: MediaMetadataRetriever,
-        durationMs: Long
-    ): MeterHit? {
-        // Kullanıcı kuralı: SON SAYAÇ yalnızca videonun toplam süresinden
-        // 1.000 ms (1 saniye) önceki kareden alınır. Başka karelere kaymayız.
-        val t = durationMs - 1_000L
-        val frame = getFrame(retriever, t) ?: return null
-        return try {
-            readMeter(frame)?.let { MeterHit(it, t) }
-        } finally {
-            frame.recycle()
-        }
-    }
-
     private fun getFrame(retriever: MediaMetadataRetriever, timeMs: Long): Bitmap? {
         return try {
-            retriever.getFrameAtTime(timeMs * 1000L, MediaMetadataRetriever.OPTION_CLOSEST)
+            // API mikrosaniye ister. OPTION_CLOSEST ile istenen zamana en yakın gerçek kare alınır.
+            retriever.getFrameAtTime(timeMs * 1_000L, MediaMetadataRetriever.OPTION_CLOSEST)
         } catch (_: Exception) {
             null
         }
     }
 
     /**
-     * Sayaç konumu sabit, fakat OSD yazı rengi değişebiliyor. Bu nedenle renk
-     * (kırmızı vb.) artık bir şart DEĞİL. Önce yalnız sayaç satırını dar kırparız,
-     * sonra aynı kareyi renkli, gri, yüksek kontrast ve renklilik maskesiyle deneriz.
-     * Böylece kırmızı / sarı / yeşil / mavi / beyaz OSD'lerde aynı kod çalışır.
+     * Metre sayacı okumada iki katman kullanılır:
+     * 1) Gerçek videolarda doğrulanan, yalnız ilk OSD satırını alan dar ROI.
+     * 2) Dar ROI başarısızsa geniş OSD alanında yalnız "Metre Sayacı" etiketli satır.
+     *
+     * İkinci satırdaki Lens Basıncı hiçbir durumda serbest sayı olarak kabul edilmez.
      */
     private suspend fun readMeter(frame: Bitmap): Double? {
-        // Sayaç değeri: sağ-alt, yalnız ilk satır. Lens basıncı satırını kesinlikle
-        // kırpım dışında bırakıyoruz. Bu, 135.0 gibi yanlış okumaları azaltır.
-        val valueCrop = cropByRatio(frame, 0.742f, 0.862f, 0.842f, 0.909f)
+        // Örnek gerçek 2560x1440 videoda doğrulanan sayaç satırı bandı.
+        // Dikey bant özellikle Lens Basıncı satırı başlamadan biter.
+        val singleLineCrop = cropByRatio(frame, 0.635f, 0.770f, 0.900f, 0.806f)
         try {
-            readMeterFromCrop(valueCrop)?.let { return it }
+            readMeterFromSingleLine(singleLineCrop)?.let { return it }
         } finally {
-            valueCrop.recycle()
+            singleLineCrop.recycle()
         }
 
-        // Çözünürlük / aspect ratio nedeniyle birkaç piksel kayma olursa biraz daha
-        // geniş ama hâlâ yalnız metre sayacı satırını içeren fallback.
-        val lineCrop = cropByRatio(frame, 0.675f, 0.852f, 0.875f, 0.911f)
+        // Pozisyon birkaç piksel değişirse etiketli satırı semantik olarak ara.
+        // Burada sayı ancak aynı OCR satırında "Metre Sayacı" etiketi varsa kabul edilir.
+        val osdBlock = cropByRatio(frame, 0.600f, 0.735f, 0.920f, 0.900f)
         return try {
-            readMeterFromCrop(lineCrop)
+            readMeterByLabel(osdBlock)
         } finally {
-            lineCrop.recycle()
+            osdBlock.recycle()
         }
     }
 
-    private suspend fun readMeterFromCrop(crop: Bitmap): Double? {
-        val candidates = mutableListOf<Double>()
+    private suspend fun readMeterFromSingleLine(crop: Bitmap): Double? {
+        val strong = mutableListOf<Double>()
+        val weak = mutableListOf<Double>()
 
-        suspend fun tryBitmap(bitmap: Bitmap) {
+        suspend fun inspect(bitmap: Bitmap) {
             try {
-                parseMeter(recognize(bitmap))?.let { candidates += it }
+                val result = recognizeResult(bitmap)
+                result.textBlocks.flatMap { it.lines }.forEach { line ->
+                    val text = normalizeOcrChars(line.text)
+                    if (containsForbiddenMeterLabel(text)) return@forEach
+                    val value = parseStrictMeter(text) ?: return@forEach
+                    if (containsMeterLabel(text)) strong += value else weak += value
+                }
             } finally {
                 bitmap.recycle()
             }
         }
 
-        // 1) Orijinal renk. ML Kit çoğu OSD rengini doğrudan okuyabilir.
-        tryBitmap(scale(crop, 5, true))
+        inspect(scale(crop, 5, true))
 
-        // 2) Renkten bağımsız gri + otomatik kontrast.
         val gray = grayscaleAutoContrast(crop)
-        tryBitmap(scale(gray, 5, true))
-        gray.recycle()
+        try {
+            inspect(scale(gray, 5, true))
+        } finally {
+            gray.recycle()
+        }
 
-        // 3) OSD rengi her ne olursa olsun, doygun/renkli pikselleri ayır.
-        // Boru yüzeyi genellikle düşük doygunluklu olduğu için yazıyı temizler.
         val chroma = isolateHighChromaText(crop, thicken = true)
-        tryBitmap(scale(chroma, 5, false))
-        chroma.recycle()
+        try {
+            inspect(scale(chroma, 5, false))
+        } finally {
+            chroma.recycle()
+        }
 
-        // 4) Parlaklık tabanlı Otsu siyah-beyaz. Beyaz/gri OSD için yararlı fallback.
         val binary = otsuBinary(crop)
-        tryBitmap(scale(binary, 5, false))
-        binary.recycle()
+        try {
+            inspect(scale(binary, 5, false))
+        } finally {
+            binary.recycle()
+        }
 
-        return chooseMeterCandidate(candidates)
+        // Etiket açıkça görülmüşse, iki OCR varyantının uzlaşması tercih edilir.
+        chooseConsensus(strong, allowSingle = true)?.let { return it }
+
+        // Etiket OCR'da düşmüşse dar ROI sayesinde sayı yine sayaç satırındadır;
+        // fakat tek bir yöntemin gördüğü değeri kabul etmeyiz. En az iki yöntem aynı
+        // iki ondalıklı değeri görmelidir.
+        return chooseConsensus(weak, allowSingle = false)
+    }
+
+    private suspend fun readMeterByLabel(crop: Bitmap): Double? {
+        val candidates = mutableListOf<Double>()
+
+        suspend fun inspect(bitmap: Bitmap) {
+            try {
+                val result = recognizeResult(bitmap)
+                for (block in result.textBlocks) {
+                    for (line in block.lines) {
+                        val text = normalizeOcrChars(line.text)
+                        if (!containsMeterLabel(text)) continue
+                        if (containsForbiddenMeterLabel(text)) continue
+                        parseStrictMeter(text)?.let { candidates += it }
+                    }
+                }
+            } finally {
+                bitmap.recycle()
+            }
+        }
+
+        inspect(scale(crop, 4, true))
+
+        val gray = grayscaleAutoContrast(crop)
+        try {
+            inspect(scale(gray, 4, true))
+        } finally {
+            gray.recycle()
+        }
+
+        val chroma = isolateHighChromaText(crop, thicken = true)
+        try {
+            inspect(scale(chroma, 4, false))
+        } finally {
+            chroma.recycle()
+        }
+
+        return chooseConsensus(candidates, allowSingle = true)
+    }
+
+    private fun containsMeterLabel(text: String): Boolean {
+        val s = normalizeForSearch(text)
+        val hasMetre = s.contains("metre") || s.contains("meter")
+        val hasSayac = s.contains("sayac") || s.contains("sayaci")
+        return (hasMetre && hasSayac) || s.contains("metresayac") || s.contains("metersayac")
+    }
+
+    private fun containsForbiddenMeterLabel(text: String): Boolean {
+        val s = normalizeForSearch(text)
+        return s.contains("lens") ||
+            s.contains("basinc") ||
+            s.contains("arac") ||
+            s.contains("egim") ||
+            s.contains("pressure") ||
+            s.contains("slope")
+    }
+
+    /**
+     * Sayaç bu kamera OSD'sinde iki ondalıklıdır (0,00 / 11,95 / 23,18).
+     * Bu nedenle 129.0 / 135.0 gibi Lens Basıncı değerleri yapısal olarak da elenir.
+     */
+    private fun parseStrictMeter(text: String): Double? {
+        val cleaned = normalizeMeterText(text)
+        val matches = Regex("(?<!\\d)(-?\\d{1,4}[\\.,]\\d{2})(?!\\d)")
+            .findAll(cleaned)
+            .mapNotNull { it.groupValues[1].replace(',', '.').toDoubleOrNull() }
+            .filter { it.isFinite() && it in -999.99..9999.99 }
+            .toList()
+
+        return matches.singleOrNull()
+    }
+
+    private fun chooseConsensus(values: List<Double>, allowSingle: Boolean): Double? {
+        if (values.isEmpty()) return null
+        val rounded = values.map { round(it * 100.0) / 100.0 }
+        val grouped = rounded.groupingBy { it }.eachCount()
+        val winner = grouped.maxByOrNull { it.value } ?: return null
+        if (winner.value >= 2) return winner.key
+        return if (allowSingle && grouped.size == 1) winner.key else null
+    }
+
+    /**
+     * Yardımcı OSD bilgileri sadece 1. saniye karesinden okunur.
+     * Yanlış rakam taşınmasın diye parsel yalnız PARSEL kelimesine bağlı olarak,
+     * çap yalnız Çap satırından, yön yalnız İnceleme Yönü satırından alınır.
+     */
+    private suspend fun readHeader(frame: Bitmap): HeaderInfo {
+        val crop = cropByRatio(frame, 0.000f, 0.000f, 0.500f, 0.300f)
+        return try {
+            var header = HeaderInfo()
+
+            suspend fun inspect(bitmap: Bitmap) {
+                try {
+                    header = header.merge(parseHeader(recognizeResult(bitmap).text))
+                } finally {
+                    bitmap.recycle()
+                }
+            }
+
+            inspect(scale(crop, 3, true))
+
+            if (header.parsel == null || header.capMm == null || header.yon == null || header.konum == null) {
+                val gray = grayscaleAutoContrast(crop)
+                try {
+                    inspect(scale(gray, 3, true))
+                } finally {
+                    gray.recycle()
+                }
+            }
+
+            if (header.parsel == null || header.capMm == null || header.yon == null || header.konum == null) {
+                val chroma = isolateHighChromaText(crop, thicken = true)
+                try {
+                    inspect(scale(chroma, 3, false))
+                } finally {
+                    chroma.recycle()
+                }
+            }
+
+            header
+        } finally {
+            crop.recycle()
+        }
+    }
+
+    private fun parseHeader(raw: String): HeaderInfo {
+        if (raw.isBlank()) return HeaderInfo()
+
+        val cleanedRaw = normalizeOcrChars(raw)
+        val lines = cleanedRaw.lines().map { it.trim() }.filter { it.isNotBlank() }
+
+        var parsel: String? = null
+        var kesitNo: String? = null
+        var cap: Int? = null
+        var yon: String? = null
+
+        // Parsel: yalnız "123PARSEL" biçiminden al. Tarih/saat veya basınç sayıları asla kullanılmaz.
+        Regex("(?i)(\\d{1,6})\\s*PARSEL")
+            .find(cleanedRaw)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.let { parsel = it }
+
+        for (line in lines) {
+            val search = normalizeForSearch(line)
+
+            if (kesitNo == null && search.contains("borukesitno")) {
+                valueAfterSeparator(line)?.let { value ->
+                    normalizeHatToken(value)?.takeIf { it.isNotBlank() }?.let { kesitNo = it }
+                }
+            }
+
+            if (cap == null && (search.contains("capmm") || search.startsWith("cap"))) {
+                val after = valueAfterSeparator(line) ?: line
+                Regex("(?<!\\d)(\\d{2,4})(?!\\d)")
+                    .find(after)
+                    ?.groupValues
+                    ?.getOrNull(1)
+                    ?.toIntOrNull()
+                    ?.takeIf { it in 50..5000 }
+                    ?.let { cap = it }
+            }
+
+            if (yon == null && search.contains("incelemeyonu")) {
+                val value = valueAfterSeparator(line)
+                    ?: line.trim().split(Regex("\\s+")).lastOrNull()
+                value?.uppercase(Locale("tr", "TR"))
+                    ?.replace(Regex("[^A-ZÇĞİÖŞÜ]"), "")
+                    ?.takeIf { it.length in 1..4 && it !in setOf("YON", "YONU") }
+                    ?.let { yon = it }
+            }
+        }
+
+        return HeaderInfo(parsel = parsel, konum = kesitNo, capMm = cap, yon = yon)
+    }
+
+    /**
+     * Dosya adı örnekleri:
+     *  a43-44_20260924_...       -> A43-A44
+     *  A38-A38-1_20260623_...   -> A38-A38-1
+     * Son ek (-1 gibi) artık kaybolmaz.
+     */
+    private fun headerFromFileName(fileName: String, folderName: String?): HeaderInfo {
+        val stem = fileName.substringBeforeLast('.')
+        val match = Regex("^(.+?)_\\d{8}_\\d{2}_\\d{2}_\\d{2}(?:_\\d+)?$", RegexOption.IGNORE_CASE)
+            .find(stem)
+        val rawHat = (match?.groupValues?.getOrNull(1) ?: stem.substringBefore('_')).trim()
+        val hat = normalizeHatToken(rawHat)
+
+        return HeaderInfo(
+            parsel = parseParselFromFolder(folderName),
+            konum = hat.takeIf { it.isNotBlank() }
+        )
+    }
+
+    private fun normalizeHatToken(raw: String): String {
+        val normalized = raw.uppercase(Locale("tr", "TR"))
+            .replace('—', '-')
+            .replace('–', '-')
+            .replace(Regex("\\s+"), "")
+            .replace(Regex("[^A-ZÇĞİÖŞÜ0-9-]"), "")
+            .trim('-')
+
+        if (normalized.isBlank()) return ""
+        val parts = normalized.split('-').filter { it.isNotBlank() }
+        if (parts.size < 2) return normalized
+
+        val first = parts.first()
+        val prefix = first.takeWhile { it.isLetter() }
+        val out = mutableListOf(first)
+
+        parts.drop(1).forEachIndexed { index, part ->
+            // Yalnız ikinci düğüm tamamen rakamsa ilk düğümün harfini miras alır.
+            // Üçüncü ve sonraki parçalar (örn. A38-A38-1) varyant/kol numarasıdır.
+            val value = if (index == 0 && part.all { it.isDigit() } && prefix.isNotBlank()) {
+                prefix + part
+            } else {
+                part
+            }
+            out += value
+        }
+        return out.joinToString("-")
+    }
+
+    private fun parseParselFromFolder(folderName: String?): String? {
+        if (folderName.isNullOrBlank()) return null
+        return Regex("(\\d{1,6})\\s*(?:PRSL|PARSEL)", RegexOption.IGNORE_CASE)
+            .find(folderName.uppercase(Locale("tr", "TR")))
+            ?.groupValues
+            ?.getOrNull(1)
+    }
+
+    private fun valueAfterSeparator(line: String): String? {
+        val colon = line.indexOf(':')
+        if (colon >= 0 && colon + 1 < line.length) return line.substring(colon + 1).trim()
+        val semi = line.indexOf(';')
+        if (semi >= 0 && semi + 1 < line.length) return line.substring(semi + 1).trim()
+        return null
+    }
+
+    private fun normalizeOcrChars(text: String): String = text
+        .replace(';', ',')
+
+    private fun normalizeMeterText(text: String): String = normalizeOcrChars(text)
+        .replace('O', '0')
+        .replace('o', '0')
+        .replace('|', '1')
+
+    private fun normalizeForSearch(text: String): String = text
+        .lowercase(Locale("tr", "TR"))
+        .replace('ç', 'c')
+        .replace('ğ', 'g')
+        .replace('ı', 'i')
+        .replace('ö', 'o')
+        .replace('ş', 's')
+        .replace('ü', 'u')
+        .replace(Regex("[^a-z0-9]"), "")
+
+    private suspend fun recognizeResult(bitmap: Bitmap): Text {
+        val image = InputImage.fromBitmap(bitmap, 0)
+        return recognizer.process(image).await()
     }
 
     private fun scale(source: Bitmap, factor: Int, filter: Boolean): Bitmap =
@@ -208,131 +485,6 @@ class VideoAnalyzer(private val context: Context) {
             max(1, source.height * factor),
             filter
         )
-
-    private suspend fun recognize(bitmap: Bitmap): String {
-        val image = InputImage.fromBitmap(bitmap, 0)
-        return recognizer.process(image).await().text
-    }
-
-    private fun parseMeter(raw: String): Double? {
-        if (raw.isBlank()) return null
-
-        val cleaned = raw
-            .replace('O', '0')
-            .replace('o', '0')
-            .replace('I', '1')
-            .replace('l', '1')
-            .replace('|', '1')
-            .replace(';', ',')
-            .replace(':', ':')
-
-        val lines = cleaned.lines().map { it.trim() }.filter { it.isNotBlank() }
-
-        // Etiket yakalandıysa o satırdaki değeri tercih et.
-        val meterLine = lines.firstOrNull {
-            val low = it.lowercase(Locale("tr", "TR"))
-            low.contains("metre") || low.contains("sayac") || low.contains("sayaç")
-        }
-        parseDecimalFromText(meterLine ?: "")?.let { return validateMeter(it) }
-
-        // Dar kırpımda yalnız sayaç değeri bulunduğu için satırlardaki makul sayıları dene.
-        for (line in lines) {
-            parseDecimalFromText(line)?.let { value ->
-                validateMeter(value)?.let { return it }
-            }
-        }
-
-        parseDecimalFromText(cleaned)?.let { return validateMeter(it) }
-        return null
-    }
-
-    private fun parseDecimalFromText(text: String): Double? {
-        // Normal görüntü: 0,00 / 6,89 / 11,95
-        val decimal = Regex("(-?\\d{1,4}[\\.,]\\d{1,3})").find(text)
-        if (decimal != null) {
-            return decimal.groupValues[1].replace(',', '.').toDoubleOrNull()
-        }
-
-        // OCR virgülü/noktayı yutarsa sayaç formatının 2 ondalıklı olduğunu kullan.
-        // Örn. 1195 -> 11.95, 005 -> 0.05. 1-2 haneli belirsiz değerleri
-        // kabul etmiyoruz; bu yanlış okumayı toplama sokmaktan daha güvenli.
-        val digits = Regex("-?\\d+").findAll(text)
-            .map { it.value }
-            .maxByOrNull { it.length }
-            ?: return null
-
-        val negative = digits.startsWith('-')
-        val only = digits.removePrefix("-")
-        if (only.length < 3 || only.length > 6) return null
-        val reconstructed = only.dropLast(2) + "." + only.takeLast(2)
-        val value = reconstructed.toDoubleOrNull() ?: return null
-        return if (negative) -value else value
-    }
-
-    private fun chooseMeterCandidate(values: List<Double>): Double? {
-        if (values.isEmpty()) return null
-
-        // Değerleri 2 ondalığa yuvarla. İki farklı görüntü işleme yöntemi aynı
-        // sayıyı görüyorsa onu güvenilir kabul et.
-        val rounded = values.map { kotlin.math.round(it * 100.0) / 100.0 }
-        val grouped = rounded.groupingBy { it }.eachCount()
-        val consensus = grouped.maxByOrNull { it.value }
-        if (consensus != null && consensus.value >= 2) return consensus.key
-
-        // Tek aday varsa, tüm diğer ön işleme yöntemleri hiçbir şey okuyamamış demektir.
-        // Sabit ve dar ROI sayesinde bunu kabul ediyoruz. Birden fazla farklı aday varsa
-        // tahmin yürütmeyip OKUNAMADI bırakmak daha güvenli.
-        return rounded.distinct().singleOrNull()
-    }
-
-    private fun validateMeter(value: Double): Double? {
-        return value.takeIf { it.isFinite() && it in -999.99..9999.99 }
-    }
-
-    /** Dosya adı örn. a43-44_20260924_... -> A43-A44; klasör adı -> parsel. */
-    private fun headerFromFileName(fileName: String, folderName: String?): HeaderInfo {
-        val stem = fileName.substringBeforeLast('.')
-        val firstToken = stem.substringBefore('_').trim()
-            .replace('—', '-')
-            .replace('–', '-')
-        val parts = firstToken.split('-').map { it.trim() }.filter { it.isNotBlank() }
-
-        var konum: String? = null
-        if (parts.size >= 2) {
-            val left = normalizeNode(parts[0], null)
-            if (left != null) {
-                val prefix = left.takeWhile { it.isLetter() }
-                val right = normalizeNode(parts[1], prefix)
-                if (right != null) konum = "$left-$right"
-            }
-        }
-
-        return HeaderInfo(
-            parsel = parseParselFromFolder(folderName),
-            konum = konum
-        )
-    }
-
-    /** Örn. "DRNKY KUZU GRP 3.KSM 145 PRSL ROBOT" -> 145 */
-    private fun parseParselFromFolder(folderName: String?): String? {
-        if (folderName.isNullOrBlank()) return null
-        val normalized = folderName.uppercase(Locale("tr", "TR"))
-        return Regex("(\\d{1,6})\\s*(?:PRSL|PARSEL)", RegexOption.IGNORE_CASE)
-            .find(normalized)
-            ?.groupValues
-            ?.getOrNull(1)
-    }
-
-    private fun normalizeNode(raw: String, inheritedPrefix: String?): String? {
-        val cleaned = raw.uppercase(Locale("tr", "TR"))
-            .replace(Regex("[^A-ZÇĞİÖŞÜ0-9]"), "")
-        if (cleaned.isBlank()) return null
-
-        val hasLetter = cleaned.any { it.isLetter() }
-        return if (!hasLetter && !inheritedPrefix.isNullOrBlank()) {
-            inheritedPrefix + cleaned
-        } else cleaned
-    }
 
     private fun cropByRatio(
         source: Bitmap,
@@ -378,6 +530,7 @@ class VideoAnalyzer(private val context: Context) {
         val src = IntArray(w * h)
         source.getPixels(src, 0, w, 0, 0, w, h)
         val hit = BooleanArray(src.size)
+
         for (i in src.indices) {
             val c = src[i]
             val r = Color.red(c)
@@ -386,14 +539,15 @@ class VideoAnalyzer(private val context: Context) {
             val hi = max(r, max(g, b))
             val lo = min(r, min(g, b))
             val chroma = hi - lo
-            hit[i] = chroma >= 42 && hi >= 80
+            hit[i] = chroma >= 38 && hi >= 75
         }
+
         val out = IntArray(src.size) { Color.WHITE }
+        val radius = if (thicken) 1 else 0
         for (y in 0 until h) {
             for (x in 0 until w) {
                 val i = y * w + x
                 if (!hit[i]) continue
-                val radius = if (thicken) 1 else 0
                 for (dy in -radius..radius) {
                     val yy = y + dy
                     if (yy !in 0 until h) continue
@@ -415,12 +569,15 @@ class VideoAnalyzer(private val context: Context) {
         source.getPixels(src, 0, w, 0, 0, w, h)
         val hist = IntArray(256)
         val lum = IntArray(src.size)
+
         for (i in src.indices) {
             val c = src[i]
-            val y = (0.299 * Color.red(c) + 0.587 * Color.green(c) + 0.114 * Color.blue(c)).toInt().coerceIn(0, 255)
+            val y = (0.299 * Color.red(c) + 0.587 * Color.green(c) + 0.114 * Color.blue(c))
+                .toInt().coerceIn(0, 255)
             lum[i] = y
             hist[y]++
         }
+
         val total = lum.size
         var sum = 0.0
         for (i in 0..255) sum += i * hist[i]
@@ -428,6 +585,7 @@ class VideoAnalyzer(private val context: Context) {
         var wB = 0
         var bestVar = -1.0
         var threshold = 127
+
         for (t in 0..255) {
             wB += hist[t]
             if (wB == 0) continue
@@ -442,6 +600,7 @@ class VideoAnalyzer(private val context: Context) {
                 threshold = t
             }
         }
+
         val out = IntArray(lum.size)
         for (i in lum.indices) {
             out[i] = if (lum[i] <= threshold) Color.BLACK else Color.WHITE
