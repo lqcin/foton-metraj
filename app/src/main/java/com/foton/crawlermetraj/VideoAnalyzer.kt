@@ -16,7 +16,7 @@ import kotlin.math.min
 import kotlin.math.round
 
 /**
- * v0.5.0 - saha videosu doğrulamalı sayaç okuma.
+ * v0.6.0 - sabit koordinatlı, renkten bağımsız sayaç okuma.
  *
  * Sabit kurallar:
  *  - İlk sayaç: videonun tam 1.000 ms karesi
@@ -141,145 +141,136 @@ class VideoAnalyzer(private val context: Context) {
     }
 
     /**
-     * Metre sayacı okumada iki katman kullanılır:
-     * 1) Gerçek videolarda doğrulanan, yalnız ilk OSD satırını alan dar ROI.
-     * 2) Dar ROI başarısızsa geniş OSD alanında yalnız "Metre Sayacı" etiketli satır.
+     * v0.6.0 - Sabit koordinatlı sayaç okuma.
      *
-     * İkinci satırdaki Lens Basıncı hiçbir durumda serbest sayı olarak kabul edilmez.
+     * Bu kamera ailesinde OSD'nin konumu sabit. Bu nedenle artık "Metre Sayacı"
+     * etiketini, Lens Basıncı'nı veya OSD bloğunun geri kalanını OCR'a vermiyoruz.
+     * Yalnız sayaç DEĞERİNİN bulunduğu küçük dikdörtgen okunur.
+     *
+     * Referans 2560x1440 videoda doğrulanan sayı alanı:
+     *   x = 1980..2145
+     *   y = 1128..1160
+     *
+     * Koordinatlar oran olarak tutulduğu için aynı OSD düzeninin farklı çözünürlüklerinde
+     * aynı fiziksel alan seçilir. Lens Basıncı satırı bu ROI'nin tamamen dışındadır.
      */
     private suspend fun readMeter(frame: Bitmap): Double? {
-        // Örnek gerçek 2560x1440 videoda doğrulanan sayaç satırı bandı.
-        // Dikey bant özellikle Lens Basıncı satırı başlamadan biter.
-        val singleLineCrop = cropByRatio(frame, 0.635f, 0.770f, 0.900f, 0.806f)
+        // Ana ROI: yalnız "0,00 / 1,49 / 23,18" gibi sayaç değeri.
+        val primary = cropByRatio(
+            frame,
+            1980f / 2560f,
+            1128f / 1440f,
+            2145f / 2560f,
+            1160f / 1440f
+        )
         try {
-            readMeterFromSingleLine(singleLineCrop)?.let { return it }
+            readNumericRoi(primary)?.let { return it }
         } finally {
-            singleLineCrop.recycle()
+            primary.recycle()
         }
 
-        // Pozisyon birkaç piksel değişirse etiketli satırı semantik olarak ara.
-        // Burada sayı ancak aynı OCR satırında "Metre Sayacı" etiketi varsa kabul edilir.
-        val osdBlock = cropByRatio(frame, 0.600f, 0.735f, 0.920f, 0.900f)
+        // Birkaç piksel anti-alias / ölçek farkına karşı güvenli yedek alan.
+        // Dikey alt sınır Lens Basıncı satırına ulaşmadan biter.
+        val padded = cropByRatio(
+            frame,
+            1968f / 2560f,
+            1120f / 1440f,
+            2160f / 2560f,
+            1164f / 1440f
+        )
         return try {
-            readMeterByLabel(osdBlock)
+            readNumericRoi(padded)
         } finally {
-            osdBlock.recycle()
+            padded.recycle()
         }
     }
 
-    private suspend fun readMeterFromSingleLine(crop: Bitmap): Double? {
-        val strong = mutableListOf<Double>()
-        val weak = mutableListOf<Double>()
-
-        suspend fun inspect(bitmap: Bitmap) {
-            try {
-                val result = recognizeResult(bitmap)
-                result.textBlocks.flatMap { it.lines }.forEach { line ->
-                    val text = normalizeOcrChars(line.text)
-                    if (containsForbiddenMeterLabel(text)) return@forEach
-                    val value = parseStrictMeter(text) ?: return@forEach
-                    if (containsMeterLabel(text)) strong += value else weak += value
-                }
-            } finally {
-                bitmap.recycle()
-            }
-        }
-
-        inspect(scale(crop, 5, true))
-
-        val gray = grayscaleAutoContrast(crop)
-        try {
-            inspect(scale(gray, 5, true))
-        } finally {
-            gray.recycle()
-        }
-
-        val chroma = isolateHighChromaText(crop, thicken = true)
-        try {
-            inspect(scale(chroma, 5, false))
-        } finally {
-            chroma.recycle()
-        }
-
-        val binary = otsuBinary(crop)
-        try {
-            inspect(scale(binary, 5, false))
-        } finally {
-            binary.recycle()
-        }
-
-        // Etiket açıkça görülmüşse, iki OCR varyantının uzlaşması tercih edilir.
-        chooseConsensus(strong, allowSingle = true)?.let { return it }
-
-        // Etiket OCR'da düşmüşse dar ROI sayesinde sayı yine sayaç satırındadır;
-        // fakat tek bir yöntemin gördüğü değeri kabul etmeyiz. En az iki yöntem aynı
-        // iki ondalıklı değeri görmelidir.
-        return chooseConsensus(weak, allowSingle = false)
-    }
-
-    private suspend fun readMeterByLabel(crop: Bitmap): Double? {
+    /**
+     * ROI'nin içinde yalnız sayaç rakamları bulunduğu varsayılır.
+     * Renk hiçbir karar kuralında kullanılmaz. Aynı görüntü farklı ışık/OSD rengi için
+     * gri ton, otomatik kontrast ve siyah-beyaz varyantlarla tekrar okunur.
+     *
+     * Yanlış Excel değerindense OKUNAMADI tercih edilir: en az iki farklı görüntü
+     * varyantı aynı iki ondalıklı değerde uzlaşmadan sonuç kabul edilmez.
+     */
+    private suspend fun readNumericRoi(crop: Bitmap): Double? {
         val candidates = mutableListOf<Double>()
 
         suspend fun inspect(bitmap: Bitmap) {
             try {
                 val result = recognizeResult(bitmap)
-                for (block in result.textBlocks) {
-                    for (line in block.lines) {
-                        val text = normalizeOcrChars(line.text)
-                        if (!containsMeterLabel(text)) continue
-                        if (containsForbiddenMeterLabel(text)) continue
-                        parseStrictMeter(text)?.let { candidates += it }
-                    }
+                val text = result.text
+                parseNumericOnlyMeter(text)?.let { candidates += it }
+
+                // ML Kit bazen tek blok metninde ayırıcıyı bozarken satırda doğru okuyabiliyor.
+                result.textBlocks.flatMap { it.lines }.forEach { line ->
+                    parseNumericOnlyMeter(line.text)?.let { candidates += it }
                 }
             } finally {
                 bitmap.recycle()
             }
         }
 
-        inspect(scale(crop, 4, true))
+        // 1) Orijinal renk. Renge güvenmiyoruz; yalnız OCR için ilk aday.
+        inspect(scale(crop, 6, true))
 
+        // 2) Renkten tamamen bağımsız gri + otomatik kontrast.
         val gray = grayscaleAutoContrast(crop)
         try {
-            inspect(scale(gray, 4, true))
+            inspect(scale(gray, 6, true))
+
+            // 3) Ters gri. Açık/koyu yazı değişimlerine karşı.
+            val invertedGray = invert(gray)
+            try {
+                inspect(scale(invertedGray, 6, true))
+            } finally {
+                invertedGray.recycle()
+            }
         } finally {
             gray.recycle()
         }
 
-        val chroma = isolateHighChromaText(crop, thicken = true)
+        // 4) Otsu ikili görüntü.
+        val binary = otsuBinary(crop)
         try {
-            inspect(scale(chroma, 4, false))
+            inspect(scale(binary, 6, false))
+
+            // 5) Otsu ters görüntü.
+            val invertedBinary = invert(binary)
+            try {
+                inspect(scale(invertedBinary, 6, false))
+            } finally {
+                invertedBinary.recycle()
+            }
         } finally {
-            chroma.recycle()
+            binary.recycle()
         }
 
-        return chooseConsensus(candidates, allowSingle = true)
-    }
-
-    private fun containsMeterLabel(text: String): Boolean {
-        val s = normalizeForSearch(text)
-        val hasMetre = s.contains("metre") || s.contains("meter")
-        val hasSayac = s.contains("sayac") || s.contains("sayaci")
-        return (hasMetre && hasSayac) || s.contains("metresayac") || s.contains("metersayac")
-    }
-
-    private fun containsForbiddenMeterLabel(text: String): Boolean {
-        val s = normalizeForSearch(text)
-        return s.contains("lens") ||
-            s.contains("basinc") ||
-            s.contains("arac") ||
-            s.contains("egim") ||
-            s.contains("pressure") ||
-            s.contains("slope")
+        return chooseNumericConsensus(candidates)
     }
 
     /**
-     * Sayaç bu kamera OSD'sinde iki ondalıklıdır (0,00 / 11,95 / 23,18).
-     * Bu nedenle 129.0 / 135.0 gibi Lens Basıncı değerleri yapısal olarak da elenir.
+     * Sabit sayı ROI'sinde yalnız xx,xx / xx.xx biçimi kabul edilir.
+     * Lens basıncı gibi etiketler zaten görüntüde yoktur; yine de OCR metni içinde
+     * harf veya birden fazla sayı oluşursa değer reddedilir.
      */
-    private fun parseStrictMeter(text: String): Double? {
-        val cleaned = normalizeMeterText(text)
+    private fun parseNumericOnlyMeter(text: String): Double? {
+        if (text.isBlank()) return null
+
+        val normalized = text
+            .replace('O', '0')
+            .replace('o', '0')
+            .replace('|', '1')
+            .replace('I', '1')
+            .replace('l', '1')
+            .replace(';', ',')
+            .replace(Regex("\\s+"), "")
+
+        // ROI yalnız rakam/ayırıcı içermeli. Başka metin geldiyse koordinat/OCR güvenilir değil.
+        if (normalized.any { it.isLetter() }) return null
+
         val matches = Regex("(?<!\\d)(-?\\d{1,4}[\\.,]\\d{2})(?!\\d)")
-            .findAll(cleaned)
+            .findAll(normalized)
             .mapNotNull { it.groupValues[1].replace(',', '.').toDoubleOrNull() }
             .filter { it.isFinite() && it in -999.99..9999.99 }
             .toList()
@@ -287,13 +278,37 @@ class VideoAnalyzer(private val context: Context) {
         return matches.singleOrNull()
     }
 
-    private fun chooseConsensus(values: List<Double>, allowSingle: Boolean): Double? {
+    private fun chooseNumericConsensus(values: List<Double>): Double? {
         if (values.isEmpty()) return null
         val rounded = values.map { round(it * 100.0) / 100.0 }
         val grouped = rounded.groupingBy { it }.eachCount()
         val winner = grouped.maxByOrNull { it.value } ?: return null
-        if (winner.value >= 2) return winner.key
-        return if (allowSingle && grouped.size == 1) winner.key else null
+
+        // En az iki bağımsız OCR görünümü aynı değeri söylemeli.
+        if (winner.value < 2) return null
+
+        // Başka bir değer de aynı oy sayısına sahipse belirsizdir, sonuç verme.
+        val tied = grouped.values.count { it == winner.value } > 1
+        if (tied) return null
+
+        return winner.key
+    }
+
+    private fun invert(source: Bitmap): Bitmap {
+        val w = source.width
+        val h = source.height
+        val src = IntArray(w * h)
+        source.getPixels(src, 0, w, 0, 0, w, h)
+        val out = IntArray(src.size)
+        for (i in src.indices) {
+            val c = src[i]
+            out[i] = Color.rgb(
+                255 - Color.red(c),
+                255 - Color.green(c),
+                255 - Color.blue(c)
+            )
+        }
+        return Bitmap.createBitmap(out, w, h, Bitmap.Config.ARGB_8888)
     }
 
     /**
