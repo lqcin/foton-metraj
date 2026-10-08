@@ -11,20 +11,20 @@ object PoleFileUtils {
 
     data class MediaFile(val file: DocumentFile, val kind: Kind)
 
+    /**
+     * Yalnız seçilen klasörün doğrudan içindeki medya dosyalarını toplar.
+     * Alt klasörlere girmez. Böylece benzer isimli firma/iş klasörleri birbirine karışmaz.
+     */
     fun collect(folder: DocumentFile): List<MediaFile> {
         val out = mutableListOf<MediaFile>()
-        fun walk(node: DocumentFile) {
-            if (node.isDirectory) {
-                node.listFiles().forEach { walk(it) }
-            } else if (node.isFile) {
-                val ext = node.name?.substringAfterLast('.', "")?.lowercase(Locale.US) ?: ""
-                when {
-                    ext in videos -> out += MediaFile(node, Kind.VIDEO)
-                    ext in images -> out += MediaFile(node, Kind.IMAGE)
-                }
+        folder.listFiles().forEach { node ->
+            if (!node.isFile) return@forEach
+            val ext = node.name?.substringAfterLast('.', "")?.lowercase(Locale.US) ?: ""
+            when {
+                ext in videos -> out += MediaFile(node, Kind.VIDEO)
+                ext in images -> out += MediaFile(node, Kind.IMAGE)
             }
         }
-        walk(folder)
         return out.sortedWith(compareBy<MediaFile>({ it.file.lastModified() }, { it.file.name ?: "" }))
     }
 }

@@ -63,6 +63,7 @@ class PoleMonitorService : Service() {
         }
 
         val folderUri = Uri.parse(folderText)
+        PoleStore.setActiveFolder(this, folderText)
         PoleStore.saveMonitorConfig(this, true, folderText, "Pole otomatik takip başlatıldı")
         startForeground(NOTIFICATION_ID, buildNotification("Klasör izleniyor"))
 
@@ -89,7 +90,7 @@ class PoleMonitorService : Service() {
                 for (entry in media) {
                     val file = entry.file
                     val uriText = file.uri.toString()
-                    if (PoleStore.isProcessed(this, uriText)) continue
+                    if (PoleStore.isProcessed(this, uriText, folderUri.toString())) continue
 
                     val size = file.length()
                     val previous = fileStates[uriText]
@@ -114,11 +115,13 @@ class PoleMonitorService : Service() {
                     when (entry.kind) {
                         PoleFileUtils.Kind.VIDEO -> PoleStore.upsertVideo(
                             this,
-                            analyzer.analyzeVideo(file.uri, file.name ?: "video")
+                            analyzer.analyzeVideo(file.uri, file.name ?: "video"),
+                            folderUri.toString()
                         )
                         PoleFileUtils.Kind.IMAGE -> PoleStore.upsertPhoto(
                             this,
-                            analyzer.analyzePhoto(file.uri, file.name ?: "foto")
+                            analyzer.analyzePhoto(file.uri, file.name ?: "foto"),
+                            folderUri.toString()
                         )
                     }
 
@@ -129,11 +132,11 @@ class PoleMonitorService : Service() {
                     processed++
                 }
 
-                PoleStore.reconcile(this)
-                val records = PoleStore.getRecords(this)
+                PoleStore.reconcile(this, folderUri.toString())
+                val records = PoleStore.getRecords(this, folderUri.toString())
                 val matched = records.count { it.isMatched }
                 val pendingVideos = records.count { !it.isMatched }
-                val pendingPhotos = PoleStore.getPendingPhotos(this).size
+                val pendingPhotos = PoleStore.getPendingPhotos(this, folderUri.toString()).size
                 val total = records.mapNotNull { it.distanceM }.sum()
                 val status = when {
                     processed > 0 -> "$processed yeni dosya işlendi"

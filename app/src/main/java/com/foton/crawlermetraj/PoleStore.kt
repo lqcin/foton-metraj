@@ -14,8 +14,9 @@ object PoleStore {
     private const val KEY_MONITOR_ACTIVE = "monitor_active"
     private const val KEY_MONITOR_FOLDER = "monitor_folder"
     private const val KEY_MONITOR_STATUS = "monitor_status"
+    private const val KEY_ACTIVE_FOLDER = "active_folder"
 
-    const val ANALYSIS_VERSION = 1
+    const val ANALYSIS_VERSION = 2
 
     private const val COORD_TOLERANCE = 0.0015
     private const val PRE_TIME_TOLERANCE_MS = 5_000L
@@ -33,46 +34,59 @@ object PoleStore {
         val p = prefs(context)
         val current = p.getInt(KEY_VERSION, 0)
         if (current == ANALYSIS_VERSION) return
+
+        // v0.9.1 ile Pole verileri klasör URI'sine göre izole ediliyor.
+        // Eski tek-havuz kayıtlarını taşımıyoruz; yanlış klasör karışımı kalmasın.
         p.edit()
+            .clear()
             .putInt(KEY_VERSION, ANALYSIS_VERSION)
-            .remove(KEY_RECORDS)
-            .remove(KEY_PHOTOS)
-            .remove(KEY_PROCESSED)
             .putBoolean(KEY_MONITOR_ACTIVE, false)
-            .putString(KEY_MONITOR_STATUS, "Pole analiz sürümü yenilendi")
+            .putString(KEY_MONITOR_STATUS, "Pole klasör izolasyonu etkinleştirildi")
             .apply()
     }
 
     @Synchronized
-    fun isProcessed(context: Context, uri: String): Boolean {
+    fun setActiveFolder(context: Context, folderUri: String?) {
         ensureVersion(context)
-        return readProcessed(context).contains(uri)
+        prefs(context).edit().putString(KEY_ACTIVE_FOLDER, folderUri).apply()
     }
 
     @Synchronized
-    fun upsertVideo(context: Context, video: PoleVideoObservation) {
+    fun getActiveFolder(context: Context): String? {
         ensureVersion(context)
-        val records = readRecords(context).toMutableList()
+        return prefs(context).getString(KEY_ACTIVE_FOLDER, null)
+    }
+
+    @Synchronized
+    fun isProcessed(context: Context, uri: String, folderUri: String? = getActiveFolder(context)): Boolean {
+        ensureVersion(context)
+        return readProcessed(context, folderUri).contains(uri)
+    }
+
+    @Synchronized
+    fun upsertVideo(context: Context, video: PoleVideoObservation, folderUri: String? = getActiveFolder(context)) {
+        ensureVersion(context)
+        val records = readRecords(context, folderUri).toMutableList()
         val idx = records.indexOfFirst { it.video.uri == video.uri }
         val record = if (idx >= 0) {
             val old = records[idx]
             old.copy(video = video)
         } else PoleRecord(video = video)
         if (idx >= 0) records[idx] = record else records += record
-        writeRecords(context, records)
-        markProcessed(context, video.uri)
-        reconcile(context)
+        writeRecords(context, records, folderUri)
+        markProcessed(context, video.uri, folderUri)
+        reconcile(context, folderUri)
     }
 
     @Synchronized
-    fun upsertPhoto(context: Context, photo: PolePhotoObservation) {
+    fun upsertPhoto(context: Context, photo: PolePhotoObservation, folderUri: String? = getActiveFolder(context)) {
         ensureVersion(context)
-        val photos = readPhotos(context).toMutableList()
+        val photos = readPhotos(context, folderUri).toMutableList()
         val idx = photos.indexOfFirst { it.uri == photo.uri }
         if (idx >= 0) photos[idx] = photo else photos += photo
-        writePhotos(context, photos)
-        markProcessed(context, photo.uri)
-        reconcile(context)
+        writePhotos(context, photos, folderUri)
+        markProcessed(context, photo.uri, folderUri)
+        reconcile(context, folderUri)
     }
 
     /**
@@ -83,10 +97,10 @@ object PoleStore {
      * - Aynı GPS için birden fazla video varsa zaman farkı en küçük olan seçilir.
      */
     @Synchronized
-    fun reconcile(context: Context) {
+    fun reconcile(context: Context, folderUri: String? = getActiveFolder(context)) {
         ensureVersion(context)
-        val records = readRecords(context).toMutableList()
-        val photos = readPhotos(context).toMutableList()
+        val records = readRecords(context, folderUri).toMutableList()
+        val photos = readPhotos(context, folderUri).toMutableList()
         if (records.isEmpty() || photos.isEmpty()) return
 
         val consumedPhotoUris = mutableSetOf<String>()
@@ -135,33 +149,35 @@ object PoleStore {
         }
 
         if (consumedPhotoUris.isNotEmpty()) {
-            writeRecords(context, records)
-            writePhotos(context, photos.filterNot { it.uri in consumedPhotoUris })
+            writeRecords(context, records, folderUri)
+            writePhotos(context, photos.filterNot { it.uri in consumedPhotoUris }, folderUri)
         }
     }
 
     @Synchronized
-    fun getRecords(context: Context): List<PoleRecord> {
+    fun getRecords(context: Context, folderUri: String? = getActiveFolder(context)): List<PoleRecord> {
         ensureVersion(context)
-        reconcile(context)
-        return readRecords(context).sortedWith(
+        reconcile(context, folderUri)
+        return readRecords(context, folderUri).sortedWith(
             compareBy<PoleRecord> { it.video.timestampMs ?: Long.MAX_VALUE }
                 .thenBy { it.video.fileName }
         )
     }
 
     @Synchronized
-    fun getPendingPhotos(context: Context): List<PolePhotoObservation> {
+    fun getPendingPhotos(context: Context, folderUri: String? = getActiveFolder(context)): List<PolePhotoObservation> {
         ensureVersion(context)
-        return readPhotos(context)
+        return readPhotos(context, folderUri)
     }
 
     @Synchronized
-    fun clearPoleData(context: Context) {
+    fun clearPoleData(context: Context, folderUri: String? = getActiveFolder(context)) {
+        ensureVersion(context)
+        val suffix = scopeSuffix(folderUri)
         prefs(context).edit()
-            .remove(KEY_RECORDS)
-            .remove(KEY_PHOTOS)
-            .remove(KEY_PROCESSED)
+            .remove(KEY_RECORDS + suffix)
+            .remove(KEY_PHOTOS + suffix)
+            .remove(KEY_PROCESSED + suffix)
             .apply()
     }
 
@@ -197,46 +213,57 @@ object PoleStore {
 
     private fun prefs(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
-    private fun markProcessed(context: Context, uri: String) {
-        val set = readProcessed(context).toMutableSet()
-        set += uri
-        prefs(context).edit().putString(KEY_PROCESSED, JSONArray(set.toList()).toString()).apply()
+    /**
+     * Her seçilen klasör kendi kayıt havuzuna sahiptir. Klasör adı değil, tam URI esas alınır.
+     * Böylece aynı/benzer isimli iki klasör kesinlikle tek firma/iş kabul edilmez.
+     */
+    private fun scopeSuffix(folderUri: String?): String {
+        val folder = folderUri ?: return "__NO_FOLDER"
+        return "__" + Integer.toHexString(folder.hashCode())
     }
 
-    private fun readProcessed(context: Context): Set<String> {
-        val raw = prefs(context).getString(KEY_PROCESSED, null) ?: return emptySet()
+    private fun scopedKey(base: String, folderUri: String?): String = base + scopeSuffix(folderUri)
+
+    private fun markProcessed(context: Context, uri: String, folderUri: String?) {
+        val set = readProcessed(context, folderUri).toMutableSet()
+        set += uri
+        prefs(context).edit().putString(scopedKey(KEY_PROCESSED, folderUri), JSONArray(set.toList()).toString()).apply()
+    }
+
+    private fun readProcessed(context: Context, folderUri: String?): Set<String> {
+        val raw = prefs(context).getString(scopedKey(KEY_PROCESSED, folderUri), null) ?: return emptySet()
         return try {
             val arr = JSONArray(raw)
             buildSet { for (i in 0 until arr.length()) add(arr.optString(i)) }
         } catch (_: Exception) { emptySet() }
     }
 
-    private fun readRecords(context: Context): List<PoleRecord> {
-        val raw = prefs(context).getString(KEY_RECORDS, null) ?: return emptyList()
+    private fun readRecords(context: Context, folderUri: String?): List<PoleRecord> {
+        val raw = prefs(context).getString(scopedKey(KEY_RECORDS, folderUri), null) ?: return emptyList()
         return try {
             val arr = JSONArray(raw)
             buildList { for (i in 0 until arr.length()) add(recordFromJson(arr.getJSONObject(i))) }
         } catch (_: Exception) { emptyList() }
     }
 
-    private fun writeRecords(context: Context, records: List<PoleRecord>) {
+    private fun writeRecords(context: Context, records: List<PoleRecord>, folderUri: String?) {
         val arr = JSONArray()
         records.forEach { arr.put(recordToJson(it)) }
-        prefs(context).edit().putString(KEY_RECORDS, arr.toString()).apply()
+        prefs(context).edit().putString(scopedKey(KEY_RECORDS, folderUri), arr.toString()).apply()
     }
 
-    private fun readPhotos(context: Context): List<PolePhotoObservation> {
-        val raw = prefs(context).getString(KEY_PHOTOS, null) ?: return emptyList()
+    private fun readPhotos(context: Context, folderUri: String?): List<PolePhotoObservation> {
+        val raw = prefs(context).getString(scopedKey(KEY_PHOTOS, folderUri), null) ?: return emptyList()
         return try {
             val arr = JSONArray(raw)
             buildList { for (i in 0 until arr.length()) add(photoFromJson(arr.getJSONObject(i))) }
         } catch (_: Exception) { emptyList() }
     }
 
-    private fun writePhotos(context: Context, photos: List<PolePhotoObservation>) {
+    private fun writePhotos(context: Context, photos: List<PolePhotoObservation>, folderUri: String?) {
         val arr = JSONArray()
         photos.forEach { arr.put(photoToJson(it)) }
-        prefs(context).edit().putString(KEY_PHOTOS, arr.toString()).apply()
+        prefs(context).edit().putString(scopedKey(KEY_PHOTOS, folderUri), arr.toString()).apply()
     }
 
     private fun recordToJson(r: PoleRecord): JSONObject = JSONObject().apply {

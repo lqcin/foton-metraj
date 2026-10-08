@@ -61,12 +61,9 @@ class PoleActivity : AppCompatActivity() {
 
     private val folderPicker = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
-            val previous = selectedFolderUri?.toString()
-            if (previous != null && previous != uri.toString()) {
-                PoleStore.clearPoleData(this)
-                lastUiSignature = ""
-            }
             selectedFolderUri = uri
+            PoleStore.setActiveFolder(this, uri.toString())
+            lastUiSignature = ""
             try {
                 contentResolver.takePersistableUriPermission(
                     uri,
@@ -75,7 +72,8 @@ class PoleActivity : AppCompatActivity() {
             } catch (_: Exception) {}
             getSharedPreferences("pole_ui", MODE_PRIVATE).edit().putString("last_folder", uri.toString()).apply()
             textFolder.text = DocumentFile.fromTreeUri(this, uri)?.name ?: uri.toString()
-            textStatus.text = "Pole klasörü hazır"
+            textStatus.text = "Pole klasörü hazır • bu klasör bağımsız tutulur"
+            refreshResults(force = true)
         }
     }
 
@@ -129,6 +127,7 @@ class PoleActivity : AppCompatActivity() {
         val prefs = getSharedPreferences("pole_ui", MODE_PRIVATE)
         prefs.getString("last_folder", null)?.let {
             selectedFolderUri = Uri.parse(it)
+            PoleStore.setActiveFolder(this, it)
             textFolder.text = DocumentFile.fromTreeUri(this, selectedFolderUri!!)?.name ?: it
         }
 
@@ -146,7 +145,11 @@ class PoleActivity : AppCompatActivity() {
 
     private fun validateFolder(): Uri? {
         val uri = selectedFolderUri
-        if (uri == null) Toast.makeText(this, "Önce Pole video/fotoğraf klasörünü seç", Toast.LENGTH_SHORT).show()
+        if (uri == null) {
+            Toast.makeText(this, "Önce Pole video/fotoğraf klasörünü seç", Toast.LENGTH_SHORT).show()
+            return null
+        }
+        PoleStore.setActiveFolder(this, uri.toString())
         return uri
     }
 
@@ -179,18 +182,20 @@ class PoleActivity : AppCompatActivity() {
             ordered.forEachIndexed { index, entry ->
                 val file = entry.file
                 val uriText = file.uri.toString()
-                if (PoleStore.isProcessed(this@PoleActivity, uriText)) {
+                if (PoleStore.isProcessed(this@PoleActivity, uriText, folderUri.toString())) {
                     skipped++
                 } else {
                     textStatus.text = "${index + 1}/${ordered.size} işleniyor: ${file.name ?: "dosya"}"
                     when (entry.kind) {
                         PoleFileUtils.Kind.VIDEO -> PoleStore.upsertVideo(
                             this@PoleActivity,
-                            analyzer.analyzeVideo(file.uri, file.name ?: "video")
+                            analyzer.analyzeVideo(file.uri, file.name ?: "video"),
+                            folderUri.toString()
                         )
                         PoleFileUtils.Kind.IMAGE -> PoleStore.upsertPhoto(
                             this@PoleActivity,
-                            analyzer.analyzePhoto(file.uri, file.name ?: "foto")
+                            analyzer.analyzePhoto(file.uri, file.name ?: "foto"),
+                            folderUri.toString()
                         )
                     }
                     processed++
@@ -199,7 +204,7 @@ class PoleActivity : AppCompatActivity() {
                 refreshResults(force = true)
             }
 
-            PoleStore.reconcile(this@PoleActivity)
+            PoleStore.reconcile(this@PoleActivity, folderUri.toString())
             textStatus.text = "Tarama tamamlandı: $processed yeni dosya${if (skipped > 0) ", $skipped daha önce işlenmiş" else ""}"
             setBusy(false)
             refreshResults(force = true)
@@ -229,6 +234,7 @@ class PoleActivity : AppCompatActivity() {
             putExtra(PoleMonitorService.EXTRA_FOLDER_URI, folderUri.toString())
         }
         ContextCompat.startForegroundService(this, intent)
+        PoleStore.setActiveFolder(this, folderUri.toString())
         PoleStore.saveMonitorConfig(this, true, folderUri.toString(), "Pole otomatik takip başlatılıyor")
         refreshResults(force = true)
     }
@@ -246,7 +252,8 @@ class PoleActivity : AppCompatActivity() {
         stopMonitoring("Yeni Pole klasörü için takip durduruldu")
         selectedFolderUri = null
         getSharedPreferences("pole_ui", MODE_PRIVATE).edit().remove("last_folder").apply()
-        PoleStore.clearPoleData(this)
+        // Önceki klasörün verisi silinmez. Her klasör kendi bağımsız kayıt havuzunu korur.
+        PoleStore.setActiveFolder(this, null)
         records = emptyList()
         lastUiSignature = ""
         resultsContainer.removeAllViews()
@@ -262,8 +269,9 @@ class PoleActivity : AppCompatActivity() {
     private fun refreshResults(force: Boolean = false) {
         if (!::resultsContainer.isInitialized) return
         val cfg = PoleStore.getMonitorConfig(this)
-        val current = PoleStore.getRecords(this)
-        val pendingPhotos = PoleStore.getPendingPhotos(this).size
+        val scope = selectedFolderUri?.toString()
+        val current = PoleStore.getRecords(this, scope)
+        val pendingPhotos = PoleStore.getPendingPhotos(this, scope).size
         val total = current.mapNotNull { it.distanceM }.sum()
         val signature = "${current.size}|${current.count { it.isMatched }}|$pendingPhotos|$total|${cfg.active}|${cfg.status}"
         if (!force && signature == lastUiSignature) return
