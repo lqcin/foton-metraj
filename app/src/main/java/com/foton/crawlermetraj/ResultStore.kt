@@ -14,7 +14,7 @@ object ResultStore {
     private const val KEY_MONITOR_FIRMA = "monitor_firma"
     private const val KEY_MONITOR_TARIH = "monitor_tarih"
     private const val KEY_MONITOR_STATUS = "monitor_status"
-    private const val CURRENT_ANALYSIS_VERSION = 5
+    private const val CURRENT_ANALYSIS_VERSION = 8
 
     data class MonitorConfig(
         val active: Boolean,
@@ -113,6 +113,9 @@ object ResultStore {
         for (i in 0 until array.length()) {
             val o = array.optJSONObject(i) ?: continue
             if (o.optString("firma") != firma || o.optString("tarih") != tarih) continue
+            // v0.7.1 audit öncesindeki başarılı görünen ama eski/şüpheli algoritmayla hesaplanmış kayıtları
+            // ekranda/Excel'de göstermeyiz. Video yeniden analiz edildiğinde aynı URI kaydı yenilenir.
+            if (o.optInt("analysisVersion", 0) < CURRENT_ANALYSIS_VERSION) continue
 
             val header = HeaderInfo(
                 parsel = o.optNullableString("parsel"),

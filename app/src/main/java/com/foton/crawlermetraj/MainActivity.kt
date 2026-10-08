@@ -285,7 +285,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun appendResult(result: VideoResult) {
         val tr = Locale("tr", "TR")
-        val first = result.firstMeter?.let { String.format(tr, "%.2f", it) } ?: "?"
+        val rawFirst = result.firstMeter?.let { String.format(tr, "%.2f", it) } ?: "?"
+        val effectiveFirst = result.effectiveFirstMeter?.let { String.format(tr, "%.2f", it) } ?: "?"
         val last = result.lastMeter?.let { String.format(tr, "%.2f", it) } ?: "?"
         val meter = result.metraj?.let { String.format(tr, "%.2f m", it) } ?: "OKUNAMADI"
         val parsel = result.header.parsel ?: "?"
@@ -294,7 +295,7 @@ class MainActivity : AppCompatActivity() {
         val yon = result.header.yon ?: "?"
 
         val line = TextView(this).apply {
-            text = "$parsel Parsel | $hat | $cap | $yon\nİlk: $first   Son: $last   →   $meter\n${result.fileName}"
+            text = "$parsel Parsel | $hat | $cap | $yon\n10.sn: $rawFirst   Başlangıç: $effectiveFirst   Son: $last   →   $meter\n${result.fileName}"
             textSize = 15f
             setTextColor(if (result.isSuccess) Color.rgb(31, 65, 81) else Color.rgb(177, 76, 50))
             setPadding(12, 12, 12, 12)

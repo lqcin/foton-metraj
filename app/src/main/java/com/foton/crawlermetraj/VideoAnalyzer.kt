@@ -16,16 +16,18 @@ import kotlin.math.min
 import kotlin.math.round
 
 /**
- * v0.6.0 - sabit koordinatlı, renkten bağımsız sayaç okuma.
+ * v0.7.1 - sabit koordinatlı sayaç + 10. saniye başlangıç kuralı (audit).
  *
  * Sabit kurallar:
- *  - İlk sayaç: videonun tam 1.000 ms karesi
+ *  - Ham ilk sayaç: videonun tam 10.000 ms karesi
  *  - Son sayaç: video süresi - 1.000 ms karesi
- *  - Metraj: ABS(son - ilk)
+ *  - Metraj düzeltmesi Models.kt içinde uygulanır:
+ *      |ilk| <= 0,50 ise başlangıç 0,00 kabul edilir.
+ *      Aksi halde ham farkın üzerine 0,50 m başlangıç payı eklenir.
  *
  * Güvenlik kuralları:
  *  - Metre sayacı ile Lens/Araç Basıncı/Eğim birbirine karıştırılmaz.
- *  - Sayaç için yalnız "Metre Sayacı" satırı veya o satıra ait dar ROI kabul edilir.
+ *  - Sayaç için yalnız sabit koordinattaki dar RAKAM ROI'si kabul edilir; etiket/basınç satırları işleme girmez.
  *  - Lens basıncı gibi tek ondalıklı değerler sayaç olarak kabul edilmez.
  *  - Hat adı dosya adından alınır ve A38-A38-1 gibi ekler korunur.
  *  - Parsel öncelikle videodaki OSD "Boru Tanımı: ...PARSEL" bilgisinden alınır.
@@ -46,7 +48,7 @@ class VideoAnalyzer(private val context: Context) {
             if (durationMs <= 0L) {
                 return VideoResult(fileName, fileHeader, null, null, null, null, "Video süresi okunamadı")
             }
-            if (durationMs <= 2_000L) {
+            if (durationMs <= 11_000L) {
                 return VideoResult(
                     fileName,
                     fileHeader,
@@ -54,11 +56,11 @@ class VideoAnalyzer(private val context: Context) {
                     null,
                     null,
                     null,
-                    "Video çok kısa (2 saniye veya daha az)"
+                    "Video çok kısa (11 saniye veya daha az)"
                 )
             }
 
-            val firstTime = 1_000L
+            val firstTime = 10_000L
             val lastTime = durationMs - 1_000L
 
             val firstFrame = getFrame(retriever, firstTime)
@@ -96,10 +98,10 @@ class VideoAnalyzer(private val context: Context) {
 
             val error = when {
                 firstFrame == null && lastFrame == null -> "İlk ve son kare alınamadı"
-                firstFrame == null -> "1. saniye karesi alınamadı"
+                firstFrame == null -> "10. saniye karesi alınamadı"
                 lastFrame == null -> "Son - 1 saniye karesi alınamadı"
                 firstMeter == null && lastMeter == null -> "İlk ve son Metre Sayacı okunamadı"
-                firstMeter == null -> "1. saniyedeki Metre Sayacı okunamadı"
+                firstMeter == null -> "10. saniyedeki Metre Sayacı okunamadı"
                 lastMeter == null -> "Son - 1 saniyedeki Metre Sayacı okunamadı"
                 else -> null
             }
@@ -141,7 +143,7 @@ class VideoAnalyzer(private val context: Context) {
     }
 
     /**
-     * v0.6.0 - Sabit koordinatlı sayaç okuma.
+     * Sabit koordinatlı sayaç okuma (v0.7.1 audit).
      *
      * Bu kamera ailesinde OSD'nin konumu sabit. Bu nedenle artık "Metre Sayacı"
      * etiketini, Lens Basıncı'nı veya OSD bloğunun geri kalanını OCR'a vermiyoruz.
@@ -199,13 +201,20 @@ class VideoAnalyzer(private val context: Context) {
         suspend fun inspect(bitmap: Bitmap) {
             try {
                 val result = recognizeResult(bitmap)
-                val text = result.text
-                parseNumericOnlyMeter(text)?.let { candidates += it }
 
-                // ML Kit bazen tek blok metninde ayırıcıyı bozarken satırda doğru okuyabiliyor.
+                // Bir görüntü varyantı en fazla BİR oy verebilir. Önceki sürümde aynı OCR
+                // sonucu hem blok metninden hem satırdan iki kez eklenebiliyordu; bu da
+                // tek bir yanlış OCR okumasının sahte "konsensüs" oluşturmasına yol açabiliyordu.
+                val perVariant = linkedSetOf<Double>()
+                parseNumericOnlyMeter(result.text)?.let { perVariant += it }
                 result.textBlocks.flatMap { it.lines }.forEach { line ->
-                    parseNumericOnlyMeter(line.text)?.let { candidates += it }
+                    parseNumericOnlyMeter(line.text)?.let { perVariant += it }
                 }
+
+                if (perVariant.size == 1) {
+                    candidates += perVariant.first()
+                }
+                // Aynı varyant kendi içinde iki farklı değer görüyorsa güvenilmezdir ve oy vermez.
             } finally {
                 bitmap.recycle()
             }
@@ -312,7 +321,7 @@ class VideoAnalyzer(private val context: Context) {
     }
 
     /**
-     * Yardımcı OSD bilgileri sadece 1. saniye karesinden okunur.
+     * Yardımcı OSD bilgileri sadece 10. saniye karesinden okunur.
      * Yanlış rakam taşınmasın diye parsel yalnız PARSEL kelimesine bağlı olarak,
      * çap yalnız Çap satırından, yön yalnız İnceleme Yönü satırından alınır.
      */
@@ -472,11 +481,6 @@ class VideoAnalyzer(private val context: Context) {
 
     private fun normalizeOcrChars(text: String): String = text
         .replace(';', ',')
-
-    private fun normalizeMeterText(text: String): String = normalizeOcrChars(text)
-        .replace('O', '0')
-        .replace('o', '0')
-        .replace('|', '1')
 
     private fun normalizeForSearch(text: String): String = text
         .lowercase(Locale("tr", "TR"))

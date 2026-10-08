@@ -53,14 +53,14 @@ object XlsxExporter {
     private fun worksheet(firma: String, tarih: String, results: List<VideoResult>): String {
         val headers = listOf(
             "Tarih", "Firma", "Parsel", "Hat", "Çap (mm)", "Yön",
-            "İlk Sayaç (m)", "Son Sayaç (m)", "Metraj (m)", "Video", "Durum"
+            "10.sn Ham Sayaç (m)", "Hesap Başlangıcı (m)", "Son Sayaç (m)", "Metraj (m)", "Video", "Durum"
         )
 
         val sb = StringBuilder()
         sb.append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>")
         sb.append("<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">")
         sb.append("<cols>")
-        val widths = listOf(13, 18, 12, 18, 12, 10, 15, 15, 14, 35, 28)
+        val widths = listOf(13, 18, 12, 18, 12, 10, 18, 20, 15, 14, 35, 28)
         widths.forEachIndexed { index, width ->
             sb.append("<col min=\"${index + 1}\" max=\"${index + 1}\" width=\"$width\" customWidth=\"1\"/>")
         }
@@ -81,6 +81,7 @@ object XlsxExporter {
                     result.header.capMm?.let { Cell.Number(it.toDouble()) } ?: Cell.Text(""),
                     Cell.Text(result.header.yon ?: ""),
                     result.firstMeter?.let { Cell.Number(it) } ?: Cell.Text(""),
+                    result.effectiveFirstMeter?.let { Cell.Number(it) } ?: Cell.Text(""),
                     result.lastMeter?.let { Cell.Number(it) } ?: Cell.Text(""),
                     result.metraj?.let { Cell.Number(it) } ?: Cell.Text(""),
                     Cell.Text(result.fileName),
@@ -95,12 +96,12 @@ object XlsxExporter {
             row,
             listOf(
                 Cell.Text(""), Cell.Text(""), Cell.Text(""), Cell.Text(""), Cell.Text(""),
-                Cell.Text(""), Cell.Text(""), Cell.Text("TOPLAM"), Cell.Number(total),
+                Cell.Text(""), Cell.Text(""), Cell.Text(""), Cell.Text("TOPLAM"), Cell.Number(total),
                 Cell.Text(""), Cell.Text("")
             )
         )
 
-        sb.append("</sheetData><autoFilter ref=\"A1:K${maxOf(1, row - 1)}\"/>")
+        sb.append("</sheetData><autoFilter ref=\"A1:L${maxOf(1, row - 1)}\"/>")
         sb.append("</worksheet>")
         return sb.toString()
     }
