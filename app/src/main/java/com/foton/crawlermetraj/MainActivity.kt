@@ -35,6 +35,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var buttonFolder: Button
     private lateinit var buttonAnalyze: Button
     private lateinit var buttonMonitor: Button
+    private lateinit var buttonStop: Button
+    private lateinit var buttonChangeJob: Button
     private lateinit var buttonExcel: Button
     private lateinit var buttonShare: Button
     private lateinit var textFolder: TextView
@@ -117,6 +119,8 @@ class MainActivity : AppCompatActivity() {
         buttonFolder = findViewById(R.id.buttonFolder)
         buttonAnalyze = findViewById(R.id.buttonAnalyze)
         buttonMonitor = findViewById(R.id.buttonMonitor)
+        buttonStop = findViewById(R.id.buttonStop)
+        buttonChangeJob = findViewById(R.id.buttonChangeJob)
         buttonExcel = findViewById(R.id.buttonExcel)
         buttonShare = findViewById(R.id.buttonShare)
         textFolder = findViewById(R.id.textFolder)
@@ -136,7 +140,9 @@ class MainActivity : AppCompatActivity() {
 
         buttonFolder.setOnClickListener { folderPicker.launch(selectedFolderUri) }
         buttonAnalyze.setOnClickListener { startBatchAnalysis() }
-        buttonMonitor.setOnClickListener { toggleMonitoring() }
+        buttonMonitor.setOnClickListener { startMonitoringRequested() }
+        buttonStop.setOnClickListener { stopMonitoring() }
+        buttonChangeJob.setOnClickListener { prepareNewJob() }
         buttonExcel.setOnClickListener { exportExcel() }
         buttonShare.setOnClickListener { shareExcel() }
 
@@ -213,15 +219,9 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun toggleMonitoring() {
-        val config = ResultStore.getMonitorConfig(this)
-        if (config.active) {
-            val stopIntent = Intent(this, FolderMonitorService::class.java).apply {
-                action = FolderMonitorService.ACTION_STOP
-            }
-            startService(stopIntent)
-            ResultStore.setMonitorStatus(this, false, "Otomatik takip durduruluyor")
-            refreshStoredResults(force = true)
+    private fun startMonitoringRequested() {
+        if (ResultStore.getMonitorConfig(this).active) {
+            Toast.makeText(this, "Otomatik takip zaten çalışıyor", Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -235,6 +235,51 @@ class MainActivity : AppCompatActivity() {
             return
         }
         startMonitorInternal()
+    }
+
+    private fun stopMonitoring(status: String = "Otomatik takip durduruldu") {
+        val config = ResultStore.getMonitorConfig(this)
+        if (config.active) {
+            val stopIntent = Intent(this, FolderMonitorService::class.java).apply {
+                action = FolderMonitorService.ACTION_STOP
+            }
+            startService(stopIntent)
+        }
+        ResultStore.setMonitorStatus(this, false, status)
+        refreshStoredResults(force = true)
+    }
+
+    /**
+     * Yeni firma / klasöre geçerken eski takip servisinin arkada çalışmasını kesin olarak durdurur.
+     * Geçmiş kayıtları silmez; yalnız ekrandaki çalışma oturumunu sıfırlar.
+     */
+    private fun prepareNewJob() {
+        stopMonitoring("Firma / klasör değişikliği için takip durduruldu")
+
+        selectedFolderUri = null
+        results = emptyList()
+        pendingXlsx = null
+        lastExcelUri = null
+        lastUiSignature = ""
+
+        editFirma.setText("")
+        getPreferences(MODE_PRIVATE).edit()
+            .remove("last_firma")
+            .remove("last_folder")
+            .apply()
+
+        textFolder.text = "Klasör seçilmedi"
+        resultsContainer.removeAllViews()
+        updateTotal(emptyList())
+        progress.progress = 0
+        buttonExcel.isEnabled = false
+        buttonShare.isEnabled = false
+
+        editFirma.isEnabled = true
+        editTarih.isEnabled = true
+        buttonFolder.isEnabled = true
+        editFirma.requestFocus()
+        textStatus.text = "Yeni firma adını yaz ve video klasörünü seç"
     }
 
     private fun startMonitorInternal() {
@@ -276,9 +321,18 @@ class MainActivity : AppCompatActivity() {
         stored.forEach { appendResult(it) }
         updateTotal(stored)
         buttonExcel.isEnabled = stored.any { it.isSuccess }
-        buttonMonitor.text = if (config.active) "OTOMATİK TAKİBİ DURDUR" else "OTOMATİK TAKİBİ BAŞLAT"
+        buttonMonitor.text = "OTOMATİK TAKİBİ BAŞLAT"
+        buttonMonitor.isEnabled = !config.active
+        buttonStop.isEnabled = config.active
         buttonAnalyze.isEnabled = !config.active
-        if (config.active || config.status.startsWith("Otomatik")) {
+
+        // Takip çalışırken firma/tarih/klasör doğrudan değiştirilemez.
+        // Önce DURDUR veya FİRMA / KLASÖR DEĞİŞTİR kullanılmalı.
+        editFirma.isEnabled = !config.active
+        editTarih.isEnabled = !config.active
+        buttonFolder.isEnabled = !config.active
+
+        if (config.active || config.status.startsWith("Otomatik") || config.status.contains("durdur", ignoreCase = true)) {
             textStatus.text = config.status
         }
     }
@@ -342,11 +396,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setBusy(busy: Boolean) {
-        buttonFolder.isEnabled = !busy
-        buttonAnalyze.isEnabled = !busy && !ResultStore.getMonitorConfig(this).active
-        buttonMonitor.isEnabled = !busy
-        editFirma.isEnabled = !busy
-        editTarih.isEnabled = !busy
+        val monitorActive = ResultStore.getMonitorConfig(this).active
+        buttonFolder.isEnabled = !busy && !monitorActive
+        buttonAnalyze.isEnabled = !busy && !monitorActive
+        buttonMonitor.isEnabled = !busy && !monitorActive
+        buttonStop.isEnabled = !busy && monitorActive
+        buttonChangeJob.isEnabled = !busy
+        editFirma.isEnabled = !busy && !monitorActive
+        editTarih.isEnabled = !busy && !monitorActive
         if (busy) {
             buttonExcel.isEnabled = false
             buttonShare.isEnabled = false

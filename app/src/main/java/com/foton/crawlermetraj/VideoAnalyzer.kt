@@ -195,40 +195,52 @@ class VideoAnalyzer(private val context: Context) {
      * Yanlış Excel değerindense OKUNAMADI tercih edilir: en az iki farklı görüntü
      * varyantı aynı iki ondalıklı değerde uzlaşmadan sonuç kabul edilmez.
      */
+    private data class MeterObservation(
+        val exact: Double?,
+        val wholePart: Int?
+    )
+
+    /**
+     * Önce iki ondalıklı tam sayaç değerinde uzlaşma aranır.
+     * Tam değer güvenilir biçimde okunamazsa, aynı sabit ROI'den en az iki bağımsız
+     * görüntü varyantının uzlaştığı TAM KISIM kullanılır ve +1 m yapılır.
+     * Örn. 51,56 okunamıyor ama 51 güvenilir okunuyorsa sonuç 52,00 kabul edilir.
+     * Bu kural hem 10. saniyedeki ilk sayaç hem son sayaç için aynıdır.
+     */
     private suspend fun readNumericRoi(crop: Bitmap): Double? {
-        val candidates = mutableListOf<Double>()
+        val exactCandidates = mutableListOf<Double>()
+        val wholeCandidates = mutableListOf<Int>()
 
         suspend fun inspect(bitmap: Bitmap) {
             try {
                 val result = recognizeResult(bitmap)
+                val perVariantExact = linkedSetOf<Double>()
+                val perVariantWhole = linkedSetOf<Int>()
 
-                // Bir görüntü varyantı en fazla BİR oy verebilir. Önceki sürümde aynı OCR
-                // sonucu hem blok metninden hem satırdan iki kez eklenebiliyordu; bu da
-                // tek bir yanlış OCR okumasının sahte "konsensüs" oluşturmasına yol açabiliyordu.
-                val perVariant = linkedSetOf<Double>()
-                parseNumericOnlyMeter(result.text)?.let { perVariant += it }
-                result.textBlocks.flatMap { it.lines }.forEach { line ->
-                    parseNumericOnlyMeter(line.text)?.let { perVariant += it }
+                fun collect(text: String) {
+                    val observation = parseMeterObservation(text) ?: return
+                    observation.exact?.let { perVariantExact += it }
+                    observation.wholePart?.let { perVariantWhole += it }
                 }
 
-                if (perVariant.size == 1) {
-                    candidates += perVariant.first()
-                }
-                // Aynı varyant kendi içinde iki farklı değer görüyorsa güvenilmezdir ve oy vermez.
+                collect(result.text)
+                result.textBlocks.flatMap { it.lines }.forEach { collect(it.text) }
+
+                // Bir görüntü varyantı kendi içinde çelişmiyorsa yalnız bir oy verir.
+                if (perVariantExact.size == 1) exactCandidates += perVariantExact.first()
+                if (perVariantWhole.size == 1) wholeCandidates += perVariantWhole.first()
             } finally {
                 bitmap.recycle()
             }
         }
 
-        // 1) Orijinal renk. Renge güvenmiyoruz; yalnız OCR için ilk aday.
+        // 1) Orijinal renk
         inspect(scale(crop, 6, true))
 
-        // 2) Renkten tamamen bağımsız gri + otomatik kontrast.
+        // 2) Gri + otomatik kontrast, 3) ters gri
         val gray = grayscaleAutoContrast(crop)
         try {
             inspect(scale(gray, 6, true))
-
-            // 3) Ters gri. Açık/koyu yazı değişimlerine karşı.
             val invertedGray = invert(gray)
             try {
                 inspect(scale(invertedGray, 6, true))
@@ -239,12 +251,10 @@ class VideoAnalyzer(private val context: Context) {
             gray.recycle()
         }
 
-        // 4) Otsu ikili görüntü.
+        // 4) Otsu, 5) ters Otsu
         val binary = otsuBinary(crop)
         try {
             inspect(scale(binary, 6, false))
-
-            // 5) Otsu ters görüntü.
             val invertedBinary = invert(binary)
             try {
                 inspect(scale(invertedBinary, 6, false))
@@ -255,15 +265,22 @@ class VideoAnalyzer(private val context: Context) {
             binary.recycle()
         }
 
-        return chooseNumericConsensus(candidates)
+        // Öncelik her zaman gerçek iki ondalıklı okumadır.
+        chooseNumericConsensus(exactCandidates)?.let { return it }
+
+        // Ondalık kısmı güvenilir değilse tam kısım +1 m emniyetli yaklaşımı.
+        val whole = chooseIntegerConsensus(wholeCandidates) ?: return null
+        return whole.toDouble() + 1.0
     }
 
     /**
-     * Sabit sayı ROI'sinde yalnız xx,xx / xx.xx biçimi kabul edilir.
-     * Lens basıncı gibi etiketler zaten görüntüde yoktur; yine de OCR metni içinde
-     * harf veya birden fazla sayı oluşursa değer reddedilir.
+     * Sabit sayaç ROI'sindeki tek sayıyı çözer.
+     * - xx,xx / xx.xx ise exact dolar.
+     * - 51 / 51, / 51,5 gibi eksik ondalıklı okumalarda wholePart=51 kalır.
+     * - 4+ basamaklı ayırıcısız sonuçlar (örn. 5156) tehlikeli olduğu için reddedilir.
+     * - Negatif değerlerde yalnız tam iki ondalıklı exact okuma kabul edilir; +1 fallback uygulanmaz.
      */
-    private fun parseNumericOnlyMeter(text: String): Double? {
+    private fun parseMeterObservation(text: String): MeterObservation? {
         if (text.isBlank()) return null
 
         val normalized = text
@@ -275,16 +292,31 @@ class VideoAnalyzer(private val context: Context) {
             .replace(';', ',')
             .replace(Regex("\\s+"), "")
 
-        // ROI yalnız rakam/ayırıcı içermeli. Başka metin geldiyse koordinat/OCR güvenilir değil.
         if (normalized.any { it.isLetter() }) return null
 
-        val matches = Regex("(?<!\\d)(-?\\d{1,4}[\\.,]\\d{2})(?!\\d)")
+        // ROI içinde tek bir sayı olmalı. En fazla üç basamak tam kısım kabul edilir.
+        // Böylece 51,56 -> 5156 şeklinde ayırıcı kaybı olursa 5156 yanlışlıkla metre sayılmaz.
+        val tokens = Regex("-?\\d{1,3}(?:[\\.,]\\d{0,2})?")
             .findAll(normalized)
-            .mapNotNull { it.groupValues[1].replace(',', '.').toDoubleOrNull() }
-            .filter { it.isFinite() && it in -999.99..9999.99 }
+            .map { it.value }
             .toList()
+        if (tokens.size != 1) return null
 
-        return matches.singleOrNull()
+        val token = tokens.single()
+        val negative = token.startsWith('-')
+        val unsigned = token.removePrefix("-")
+        val parts = unsigned.split(Regex("[\\.,]"), limit = 2)
+        val whole = parts.getOrNull(0)?.toIntOrNull() ?: return null
+        if (whole !in 0..999) return null
+
+        val decimals = parts.getOrNull(1)
+        val exact = if (decimals != null && decimals.length == 2) {
+            val value = "$whole.$decimals".toDoubleOrNull() ?: return null
+            if (negative) -value else value
+        } else null
+
+        val fallbackWhole = if (!negative) whole else null
+        return MeterObservation(exact = exact, wholePart = fallbackWhole)
     }
 
     private fun chooseNumericConsensus(values: List<Double>): Double? {
@@ -292,14 +324,17 @@ class VideoAnalyzer(private val context: Context) {
         val rounded = values.map { round(it * 100.0) / 100.0 }
         val grouped = rounded.groupingBy { it }.eachCount()
         val winner = grouped.maxByOrNull { it.value } ?: return null
-
-        // En az iki bağımsız OCR görünümü aynı değeri söylemeli.
         if (winner.value < 2) return null
+        if (grouped.values.count { it == winner.value } > 1) return null
+        return winner.key
+    }
 
-        // Başka bir değer de aynı oy sayısına sahipse belirsizdir, sonuç verme.
-        val tied = grouped.values.count { it == winner.value } > 1
-        if (tied) return null
-
+    private fun chooseIntegerConsensus(values: List<Int>): Int? {
+        if (values.isEmpty()) return null
+        val grouped = values.groupingBy { it }.eachCount()
+        val winner = grouped.maxByOrNull { it.value } ?: return null
+        if (winner.value < 2) return null
+        if (grouped.values.count { it == winner.value } > 1) return null
         return winner.key
     }
 

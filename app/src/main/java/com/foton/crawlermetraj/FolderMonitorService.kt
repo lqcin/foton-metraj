@@ -40,7 +40,6 @@ class FolderMonitorService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var monitorJob: Job? = null
     private val fileStates = mutableMapOf<String, FileState>()
-    private val failedThisSession = mutableSetOf<String>()
     private lateinit var analyzer: VideoAnalyzer
 
     override fun onCreate() {
@@ -78,9 +77,11 @@ class FolderMonitorService : Service() {
         )
         startForeground(NOTIFICATION_ID, buildNotification(firma, tarih, "Klasör izleniyor"))
 
-        if (monitorJob?.isActive != true) {
-            monitorJob = scope.launch { monitorLoop(folderUri, firma, tarih) }
-        }
+        // Her START komutu yeni firma/klasör oturumudur. Eski job arkada kalıp
+        // yeni işin üstüne yazmasın diye önce kesin olarak kapatılır.
+        monitorJob?.cancel()
+        fileStates.clear()
+        monitorJob = scope.launch { monitorLoop(folderUri, firma, tarih) }
         return START_STICKY
     }
 
@@ -94,7 +95,6 @@ class FolderMonitorService : Service() {
                     continue
                 }
 
-                val folderName = root.name
                 val videos = VideoFileUtils.collectVideos(root)
                 var waiting = 0
                 var justProcessed = 0
@@ -103,7 +103,6 @@ class FolderMonitorService : Service() {
                     if (ResultStore.isProcessed(this, firma, tarih, video.uri)) continue
 
                     val key = video.uri.toString()
-                    if (key in failedThisSession) continue
                     val size = video.length()
                     val previous = fileStates[key]
 
@@ -127,14 +126,20 @@ class FolderMonitorService : Service() {
                     }
 
                     updateStatus(firma, tarih, "Analiz ediliyor: ${video.name ?: "video"}")
-                    val result = analyzer.analyze(video.uri, video.name ?: "video", folderName)
+                    val result = analyzer.analyze(video.uri, video.name ?: "video", root.name)
+
+                    // Firma/klasör değiştirildiyse eski job'un geç biten sonucu yeni oturumun
+                    // üstüne yazılmasın. Yalnız hâlâ aynı aktif takip oturumuysa kaydet.
+                    val current = ResultStore.getMonitorConfig(this)
+                    val stillSameSession = current.active &&
+                        current.folderUri == folderUri.toString() &&
+                        current.firma == firma &&
+                        current.tarih == tarih
+                    if (!stillSameSession) return
+
                     ResultStore.addResult(this, firma, tarih, video.uri, result)
                     fileStates.remove(key)
-                    if (result.isSuccess) {
-                        justProcessed++
-                    } else {
-                        failedThisSession.add(key)
-                    }
+                    justProcessed++
                 }
 
                 val rows = ResultStore.getResults(this, firma, tarih)
@@ -171,7 +176,6 @@ class FolderMonitorService : Service() {
         monitorJob?.cancel()
         monitorJob = null
         fileStates.clear()
-        failedThisSession.clear()
         ResultStore.setMonitorStatus(this, false, status)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()

@@ -14,7 +14,7 @@ object ResultStore {
     private const val KEY_MONITOR_FIRMA = "monitor_firma"
     private const val KEY_MONITOR_TARIH = "monitor_tarih"
     private const val KEY_MONITOR_STATUS = "monitor_status"
-    private const val CURRENT_ANALYSIS_VERSION = 8
+    private const val CURRENT_ANALYSIS_VERSION = 9
 
     data class MonitorConfig(
         val active: Boolean,
