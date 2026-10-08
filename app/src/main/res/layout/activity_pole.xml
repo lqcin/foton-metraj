@@ -3,70 +3,60 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:padding="20dp"
+    android:padding="18dp"
     android:background="#F7F8FA">
 
-    <TextView
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="FOTON CRAWLER METRAJ"
-        android:textSize="24sp"
-        android:textStyle="bold"
-        android:textColor="#174A5B" />
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="FOTON POLE KAMERA"
+            android:textSize="23sp"
+            android:textStyle="bold"
+            android:textColor="#174A5B" />
+
+        <Button
+            android:id="@+id/poleButtonCrawler"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="CRAWLER" />
+    </LinearLayout>
 
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
-        android:text="Metraj = |son sayaç − ilk sayaç|"
-        android:textSize="14sp"
+        android:text="Video: hat/bilgiler • Fotoğraf: distance • Eşleşme: GPS + saat"
+        android:textSize="13sp"
         android:textColor="#4B5563" />
 
     <Button
-        android:id="@+id/buttonPole"
+        android:id="@+id/poleButtonFolder"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:text="POLE KAMERA MODU" />
-
-    <EditText
-        android:id="@+id/editFirma"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="14dp"
-        android:hint="Firma adı (ör. LEDA)"
-        android:inputType="textCapWords"
-        android:singleLine="true" />
-
-    <EditText
-        android:id="@+id/editTarih"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:hint="Tarih (GG.AA.YYYY)"
-        android:inputType="text"
-        android:singleLine="true" />
-
-    <Button
-        android:id="@+id/buttonFolder"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="6dp"
-        android:text="VİDEO KLASÖRÜ SEÇ" />
+        android:layout_marginTop="10dp"
+        android:text="VİDEO + FOTOĞRAF KLASÖRÜ SEÇ" />
 
     <TextView
-        android:id="@+id/textFolder"
+        android:id="@+id/poleTextFolder"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="5dp"
+        android:layout_marginTop="4dp"
         android:text="Klasör seçilmedi"
         android:textColor="#6B7280"
         android:maxLines="2" />
 
     <Button
-        android:id="@+id/buttonMonitor"
+        android:id="@+id/poleButtonMonitor"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="10dp"
+        android:layout_marginTop="8dp"
         android:text="OTOMATİK TAKİBİ BAŞLAT" />
 
     <LinearLayout
@@ -76,7 +66,7 @@
         android:layout_marginTop="4dp">
 
         <Button
-            android:id="@+id/buttonStop"
+            android:id="@+id/poleButtonStop"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
@@ -84,45 +74,45 @@
             android:text="DURDUR" />
 
         <Button
-            android:id="@+id/buttonChangeJob"
+            android:id="@+id/poleButtonChangeFolder"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="2"
             android:layout_marginStart="6dp"
-            android:text="FİRMA / KLASÖR DEĞİŞTİR" />
+            android:text="KLASÖR DEĞİŞTİR" />
     </LinearLayout>
 
     <Button
-        android:id="@+id/buttonAnalyze"
+        android:id="@+id/poleButtonScan"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
-        android:text="KLASÖRÜ TOPLU ANALİZ ET" />
+        android:text="KLASÖRÜ TOPLU TARA" />
 
     <ProgressBar
-        android:id="@+id/progress"
+        android:id="@+id/poleProgress"
         style="?android:attr/progressBarStyleHorizontal"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="7dp"
+        android:layout_marginTop="6dp"
         android:max="100"
         android:progress="0" />
 
     <TextView
-        android:id="@+id/textStatus"
+        android:id="@+id/poleTextStatus"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="5dp"
+        android:layout_marginTop="4dp"
         android:text="Hazır"
         android:textColor="#374151" />
 
     <TextView
-        android:id="@+id/textTotal"
+        android:id="@+id/poleTextTotal"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
+        android:layout_marginTop="7dp"
         android:text="TOPLAM: 0,00 m"
-        android:textSize="20sp"
+        android:textSize="19sp"
         android:textStyle="bold"
         android:textColor="#174A5B" />
 
@@ -130,11 +120,11 @@
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:layout_marginTop="6dp"
+        android:layout_marginTop="5dp"
         android:fillViewport="true">
 
         <LinearLayout
-            android:id="@+id/resultsContainer"
+            android:id="@+id/poleResultsContainer"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical" />
@@ -144,10 +134,10 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:layout_marginTop="8dp">
+        android:layout_marginTop="7dp">
 
         <Button
-            android:id="@+id/buttonExcel"
+            android:id="@+id/poleButtonExcel"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
@@ -155,11 +145,11 @@
             android:text="EXCEL OLUŞTUR" />
 
         <Button
-            android:id="@+id/buttonShare"
+            android:id="@+id/poleButtonShare"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:layout_marginStart="8dp"
+            android:layout_marginStart="7dp"
             android:enabled="false"
             android:text="PAYLAŞ" />
     </LinearLayout>
