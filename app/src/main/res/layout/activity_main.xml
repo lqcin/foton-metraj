@@ -62,6 +62,29 @@
         android:layout_marginTop="10dp"
         android:text="OTOMATİK TAKİBİ BAŞLAT" />
 
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginTop="4dp">
+
+        <Button
+            android:id="@+id/buttonStop"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:enabled="false"
+            android:text="DURDUR" />
+
+        <Button
+            android:id="@+id/buttonChangeJob"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="2"
+            android:layout_marginStart="6dp"
+            android:text="FİRMA / KLASÖR DEĞİŞTİR" />
+    </LinearLayout>
+
     <Button
         android:id="@+id/buttonAnalyze"
         android:layout_width="match_parent"
