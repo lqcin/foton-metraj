@@ -37,6 +37,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var buttonMonitor: Button
     private lateinit var buttonStop: Button
     private lateinit var buttonChangeJob: Button
+    private lateinit var buttonPole: Button
     private lateinit var buttonExcel: Button
     private lateinit var buttonShare: Button
     private lateinit var textFolder: TextView
@@ -121,6 +122,7 @@ class MainActivity : AppCompatActivity() {
         buttonMonitor = findViewById(R.id.buttonMonitor)
         buttonStop = findViewById(R.id.buttonStop)
         buttonChangeJob = findViewById(R.id.buttonChangeJob)
+        buttonPole = findViewById(R.id.buttonPole)
         buttonExcel = findViewById(R.id.buttonExcel)
         buttonShare = findViewById(R.id.buttonShare)
         textFolder = findViewById(R.id.textFolder)
@@ -143,6 +145,7 @@ class MainActivity : AppCompatActivity() {
         buttonMonitor.setOnClickListener { startMonitoringRequested() }
         buttonStop.setOnClickListener { stopMonitoring() }
         buttonChangeJob.setOnClickListener { prepareNewJob() }
+        buttonPole.setOnClickListener { startActivity(Intent(this, PoleActivity::class.java)) }
         buttonExcel.setOnClickListener { exportExcel() }
         buttonShare.setOnClickListener { shareExcel() }
 
