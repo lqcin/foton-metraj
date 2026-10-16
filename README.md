@@ -58,3 +58,15 @@ Desteklenen video uzantıları: MP4, MOV, MKV, AVI, M4V, 3GP.
 ## Sürüm
 
 v0.1.0 - İlk Android saha prototipi.
+
+## v0.9.2 — Çoklu kare sayaç kontrolü
+
+- Başlangıç: 1, 3, 5, 9 saniye. Bitiş: sondan 1, 3, 5, 9 saniye.
+- Her ana kare kontrol edilir; ortalama alınmaz. En erken kesin başlangıç ve sona en yakın kesin bitiş seçilir.
+- Her karede sabit sayı alanı, beş görüntü varyantı ve en az iki varyantın uzlaşması kullanılır.
+- Kesin okuma yoksa ana zamanların ±250 ms komşuları da denenir.
+- Bütün kesin okuma denemeleri bittikten sonra mevcut tam kısım +1 kuralı yedek olarak kullanılır.
+- Seçilen karenin gerçek istek zamanı sonuçta saklanır. Kısa videolarda uçlar kendi yarısında kalır.
+- Başlangıç sayacının mutlak değeri 4 m’den küçükse 0 alınır; tam 4 m ve üzerinde önceki 0,50 m pay kuralı korunur. Hiçbir güvenilir sayı bulunamazsa değer uydurulmaz.
+- Bu değişiklik Crawler içindir; Pole işleyişi değiştirilmedi.
+- Android derleme ve gerçek video OCR testi bu ortamda yapılmadı.
