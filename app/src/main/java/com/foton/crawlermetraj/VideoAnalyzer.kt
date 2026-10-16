@@ -10,19 +10,20 @@ import com.google.mlkit.vision.text.Text
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.CancellationException
 import java.util.Locale
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.round
 
 /**
- * v0.7.1 - sabit koordinatlı sayaç + 10. saniye başlangıç kuralı (audit).
+ * v0.9.2 - sabit sayaç alanında çoklu uç kare kontrolü.
  *
  * Sabit kurallar:
- *  - Ham ilk sayaç: videonun tam 10.000 ms karesi
- *  - Son sayaç: video süresi - 1.000 ms karesi
+ *  - Ham ilk sayaç: 1/3/5/9 saniyede en erken güvenilir tam okuma
+ *  - Son sayaç: sondan 1/3/5/9 saniyede sona en yakın güvenilir tam okuma
  *  - Metraj düzeltmesi Models.kt içinde uygulanır:
- *      |ilk| <= 0,50 ise başlangıç 0,00 kabul edilir.
+ *      |ilk| < 4,00 ise başlangıç 0,00 kabul edilir.
  *      Aksi halde ham farkın üzerine 0,50 m başlangıç payı eklenir.
  *
  * Güvenlik kuralları:
@@ -48,44 +49,29 @@ class VideoAnalyzer(private val context: Context) {
             if (durationMs <= 0L) {
                 return VideoResult(fileName, fileHeader, null, null, null, null, "Video süresi okunamadı")
             }
-            if (durationMs <= 11_000L) {
-                return VideoResult(
-                    fileName,
-                    fileHeader,
-                    null,
-                    null,
-                    null,
-                    null,
-                    "Video çok kısa (11 saniye veya daha az)"
-                )
+            if (durationMs < 2_000L) {
+                return VideoResult(fileName, fileHeader, null, null, null, null,
+                    "Video çok kısa (2 saniyeden az)")
             }
 
-            val firstTime = 10_000L
-            val lastTime = durationMs - 1_000L
-
-            val firstFrame = getFrame(retriever, firstTime)
-            val lastFrame = getFrame(retriever, lastTime)
-
+            // İki uç birbirine karışmasın: kısa videolarda her uç kendi yarısında kalır.
+            val offsets = listOf(1_000L, 3_000L, 5_000L, 9_000L)
+            val firstTimes = offsets.filter { it < durationMs / 2 }
+                .ifEmpty { listOf(durationMs / 4) }
+            val lastTimes = firstTimes.map { durationMs - it }
             var osdHeader = HeaderInfo()
-            var firstMeter: Double? = null
-            var lastMeter: Double? = null
-
-            if (firstFrame != null) {
-                try {
-                    osdHeader = readHeader(firstFrame)
-                    firstMeter = readMeter(firstFrame)
-                } finally {
-                    firstFrame.recycle()
-                }
+            val headerFrame = getFrame(retriever, minOf(9_000L, durationMs / 2))
+            if (headerFrame != null) {
+                try { osdHeader = readHeader(headerFrame) }
+                catch (e: CancellationException) { throw e }
+                catch (_: Exception) { /* Başlık hatası sayaç kontrolünü durdurmaz. */ }
+                finally { headerFrame.recycle() }
             }
 
-            if (lastFrame != null) {
-                try {
-                    lastMeter = readMeter(lastFrame)
-                } finally {
-                    lastFrame.recycle()
-                }
-            }
+            val first = readEndpoint(retriever, firstTimes, durationMs, true)
+            val last = readEndpoint(retriever, lastTimes, durationMs, false)
+            val firstMeter = first?.value
+            val lastMeter = last?.value
 
             // Excel'e gidecek alanların kaynak önceliği bilinçli olarak sabittir.
             // Hat: dosya adı > OSD. Parsel: OSD > klasör adı.
@@ -97,12 +83,9 @@ class VideoAnalyzer(private val context: Context) {
             )
 
             val error = when {
-                firstFrame == null && lastFrame == null -> "İlk ve son kare alınamadı"
-                firstFrame == null -> "10. saniye karesi alınamadı"
-                lastFrame == null -> "Son - 1 saniye karesi alınamadı"
-                firstMeter == null && lastMeter == null -> "İlk ve son Metre Sayacı okunamadı"
-                firstMeter == null -> "10. saniyedeki Metre Sayacı okunamadı"
-                lastMeter == null -> "Son - 1 saniyedeki Metre Sayacı okunamadı"
+                first == null && last == null -> "Çoklu kare kontrolü sonrası iki sayaç da doğrulanamadı; elle kontrol gerekli"
+                first == null -> "Başlangıç sayacı çoklu kare kontrolünde doğrulanamadı; elle kontrol gerekli"
+                last == null -> "Bitiş sayacı çoklu kare kontrolünde doğrulanamadı; elle kontrol gerekli"
                 else -> null
             }
 
@@ -111,10 +94,12 @@ class VideoAnalyzer(private val context: Context) {
                 header = header,
                 firstMeter = firstMeter,
                 lastMeter = lastMeter,
-                firstTimeMs = if (firstMeter != null) firstTime else null,
-                lastTimeMs = if (lastMeter != null) lastTime else null,
+                firstTimeMs = first?.timeMs,
+                lastTimeMs = last?.timeMs,
                 error = error
             )
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             VideoResult(
                 fileName = fileName,
@@ -132,6 +117,44 @@ class VideoAnalyzer(private val context: Context) {
             }
         }
     }
+
+    private data class EndpointReading(val value: Double, val timeMs: Long)
+
+    private suspend fun readEndpoint(
+        retriever: MediaMetadataRetriever,
+        times: List<Long>,
+        durationMs: Long,
+        start: Boolean
+    ): EndpointReading? {
+        val exact = mutableListOf<EndpointReading>()
+        val approximate = mutableListOf<EndpointReading>()
+        suspend fun inspect(time: Long) {
+            val frame = getFrame(retriever, time) ?: return
+            try {
+                val reading = readMeter(frame) ?: return
+                val item = EndpointReading(reading.value, time)
+                if (reading.exact) exact += item else approximate += item
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // Tek karedeki OCR hatasında diğer zamanları denemeye devam et.
+            } finally { frame.recycle() }
+        }
+        // Bütün ana kareleri dene; bir tam-kısım tahmini sonraki kesin okumayı engellemez.
+        for (time in times) inspect(time)
+        if (exact.isEmpty()) {
+            val retries = times.flatMap { listOf(it - 250L, it + 250L) }
+                .filter { it > 0 && it < durationMs &&
+                    (if (start) it < durationMs / 2 else it > durationMs / 2) }
+                .distinct().filterNot { it in times }
+            for (time in retries) inspect(time)
+        }
+        val candidates = exact.ifEmpty { approximate }
+        return if (start) candidates.minByOrNull { it.timeMs }
+               else candidates.maxByOrNull { it.timeMs }
+    }
+
+    private data class MeterReading(val value: Double, val exact: Boolean)
 
     private fun getFrame(retriever: MediaMetadataRetriever, timeMs: Long): Bitmap? {
         return try {
@@ -156,7 +179,7 @@ class VideoAnalyzer(private val context: Context) {
      * Koordinatlar oran olarak tutulduğu için aynı OSD düzeninin farklı çözünürlüklerinde
      * aynı fiziksel alan seçilir. Lens Basıncı satırı bu ROI'nin tamamen dışındadır.
      */
-    private suspend fun readMeter(frame: Bitmap): Double? {
+    private suspend fun readMeter(frame: Bitmap): MeterReading? {
         // Ana ROI: yalnız "0,00 / 1,49 / 23,18" gibi sayaç değeri.
         val primary = cropByRatio(
             frame,
@@ -165,8 +188,10 @@ class VideoAnalyzer(private val context: Context) {
             2145f / 2560f,
             1160f / 1440f
         )
+        var primaryReading: MeterReading? = null
         try {
-            readNumericRoi(primary)?.let { return it }
+            primaryReading = readNumericRoi(primary)
+            if (primaryReading?.exact == true) return primaryReading
         } finally {
             primary.recycle()
         }
@@ -181,7 +206,8 @@ class VideoAnalyzer(private val context: Context) {
             1164f / 1440f
         )
         return try {
-            readNumericRoi(padded)
+            val paddedReading = readNumericRoi(padded)
+            if (paddedReading?.exact == true) paddedReading else primaryReading ?: paddedReading
         } finally {
             padded.recycle()
         }
@@ -205,9 +231,9 @@ class VideoAnalyzer(private val context: Context) {
      * Tam değer güvenilir biçimde okunamazsa, aynı sabit ROI'den en az iki bağımsız
      * görüntü varyantının uzlaştığı TAM KISIM kullanılır ve +1 m yapılır.
      * Örn. 51,56 okunamıyor ama 51 güvenilir okunuyorsa sonuç 52,00 kabul edilir.
-     * Bu kural hem 10. saniyedeki ilk sayaç hem son sayaç için aynıdır.
+     * Bu kural hem başlangıç hem son sayaç için aynıdır.
      */
-    private suspend fun readNumericRoi(crop: Bitmap): Double? {
+    private suspend fun readNumericRoi(crop: Bitmap): MeterReading? {
         val exactCandidates = mutableListOf<Double>()
         val wholeCandidates = mutableListOf<Int>()
 
@@ -266,11 +292,11 @@ class VideoAnalyzer(private val context: Context) {
         }
 
         // Öncelik her zaman gerçek iki ondalıklı okumadır.
-        chooseNumericConsensus(exactCandidates)?.let { return it }
+        chooseNumericConsensus(exactCandidates)?.let { return MeterReading(it, true) }
 
         // Ondalık kısmı güvenilir değilse tam kısım +1 m emniyetli yaklaşımı.
         val whole = chooseIntegerConsensus(wholeCandidates) ?: return null
-        return whole.toDouble() + 1.0
+        return MeterReading(whole.toDouble() + 1.0, false)
     }
 
     /**
@@ -356,7 +382,7 @@ class VideoAnalyzer(private val context: Context) {
     }
 
     /**
-     * Yardımcı OSD bilgileri sadece 10. saniye karesinden okunur.
+     * Yardımcı OSD bilgileri 9. saniyeden (kısa videoda orta kareden) okunur.
      * Yanlış rakam taşınmasın diye parsel yalnız PARSEL kelimesine bağlı olarak,
      * çap yalnız Çap satırından, yön yalnız İnceleme Yönü satırından alınır.
      */

@@ -25,16 +25,16 @@ data class VideoResult(
 ) {
     /**
      * v0.7.1 başlangıç kuralı:
-     * - firstMeter = videonun 10. saniyesindeki HAM sayaç değeri.
-     * - |firstMeter| <= 0.50 m ise hesap başlangıcı 0.00 m kabul edilir.
-     * - Aksi halde kamera 10. saniyeye kadar 0.50 m ilerlemiş kabul edilir ve
+     * - firstMeter = çoklu kare kontrolünde seçilen HAM başlangıç sayaç değeri.
+     * - |firstMeter| < 4.00 m ise hesap başlangıcı 0.00 m kabul edilir.
+     * - Aksi halde önceki saha kuralına göre 0.50 m başlangıç payı eklenir ve
      *   çekim yönüne göre hesap başlangıcı firstMeter değerinin 0.50 m gerisine alınır.
      */
     val effectiveFirstMeter: Double?
         get() {
             val first = firstMeter ?: return null
             val last = lastMeter ?: return null
-            if (kotlin.math.abs(first) <= 0.50) return 0.0
+            if (kotlin.math.abs(first) < 4.0) return 0.0
             return if (last >= first) first - 0.50 else first + 0.50
         }
 
